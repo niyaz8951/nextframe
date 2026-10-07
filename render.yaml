@@ -1,0 +1,21 @@
+# One-file setup for hosting the game server on Render (render.com). The database is Supabase.
+# New -> Blueprint -> pick this repository. Other Node hosts work the same way:
+# build "npm ci && npm run build", start "node dist/server.js", plus a PostgreSQL URL.
+services:
+  - type: web
+    name: the-next-frame
+    runtime: node
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/server.js
+    healthCheckPath: /api/laws
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false   # paste your Supabase "Session pooler" connection string when Render asks
+      - key: CORS_ORIGIN
+        sync: false   # leave empty unless the frontend is on GitHub Pages
