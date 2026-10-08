@@ -5,7 +5,7 @@
 import type { Router, Request, Response } from 'express';
 import type { DB, Q } from './db.js';
 import { evaluateDiscoveries } from './engine/discoveries.js';
-import { TYPES } from './engine/laws.js';
+import { GESTURES, TYPES } from './engine/laws.js';
 import { roll, sha } from './engine/rng.js';
 import { GameError, regenDue } from './engine/world.js';
 
@@ -74,6 +74,7 @@ export function social(r: Router, db: DB, h: { wrap: (fn: (req: Request, res: Re
       const [s] = await q('INSERT INTO signals (object_id, user_id, pattern, universe_tick) VALUES ($1, $2, $3, $4) RETURNING id', [o.id, me, pattern, tick]);
       const newDiscoveries = await learn(q, user, tick, 'signals', Number(o.id));
       return { ok: true, id: Number(s.id), energy: Number(user.energy) - SIGNAL.leaveCost, newDiscoveries,
+        firstGesture: user.stats.signals === 1 ? { key: 'sign', name: GESTURES.sign.name, text: GESTURES.sign.first } : null,
         narrative: 'Your signal is on it now. Anything that looks closely will see it.' };
     });
   }));

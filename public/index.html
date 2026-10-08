@@ -57,11 +57,14 @@
           <g id="L-regions"></g><g id="L-links"></g><g id="L-objects"></g><g id="L-fx"></g>
         </svg>
         <div class="mapbtns">
-          <button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="recenter" aria-label="Go to where you are">◎</button>
+          <button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="recenter" aria-label="Go to where you are">◎</button><button id="studyBtn" aria-label="Study the last thing you acted on">≡</button>
         </div>
+        <svg id="ink" class="ink" aria-hidden="true"><polyline id="trail" class="trail" points=""/><circle id="hover" class="hover" r="0"/><circle id="charge" class="charge-ring" r="0"/><circle id="chargeArc" class="charge-arc" r="0"/><text id="chargeLabel" class="charge-label"></text></svg>
+        <div id="fx" class="fx" aria-live="polite"></div>
         <div id="toasts" class="toasts" aria-live="polite"></div>
       </div>
-      <aside id="sheet" class="sheet" aria-live="polite"></aside>
+      <div id="voice" class="voicebar" role="status" aria-live="polite"></div>
+      <aside id="sheet" class="sheet" aria-label="Study sheet" hidden></aside>
     </section>
 
     <section id="view-discover" class="view page" hidden></section>

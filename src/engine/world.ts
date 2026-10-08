@@ -78,7 +78,7 @@ export class Frame {
   // LAW_ENERGY_CONSERVATION: energy only ever moves. Returns what actually moved.
   move(from: Holder, to: Holder, amount: number, why: string) {
     let n = Math.floor(Math.min(amount, from.energy));
-    if (to.key.startsWith('observer:')) n = Math.min(n, Math.max(0, EC.observerCap - to.energy));
+    if (to.key.startsWith('observer:')) n = Math.min(n, Math.max(0, ((to as any).cap ?? EC.observerCap) - to.energy));
     if (n <= 0) return 0;
     from.energy -= n; to.energy += n;
     for (const h of [from, to]) if (h.key.startsWith('object:')) this.dirty.add(Number(h.key.slice(7)));

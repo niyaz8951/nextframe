@@ -61,7 +61,7 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 .view { min-height: 0; }
 .universe { display: grid; grid-template-rows: 1fr auto; position: relative; overflow: hidden; }
 .mapwrap { position: relative; min-height: 0; }
-.map { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; background: radial-gradient(90% 70% at 70% 10%, #1a1f4d 0%, var(--night) 70%); }
+.map { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; user-select: none; background: radial-gradient(90% 70% at 70% 10%, #1a1f4d 0%, var(--night) 70%); }
 .map.dragging { cursor: grabbing; }
 .mapbtns { position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; }
 .mapbtns button { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--deep) 86%, transparent); border: 1px solid var(--line); font-size: 19px; color: var(--dim); }
@@ -92,12 +92,53 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 @keyframes shake { 0% { transform: translate(.5px, -.4px); } 50% { transform: translate(-.5px, .5px); } }
 
 /* ---- the sheet: what you have selected and what could happen ---- */
-.sheet { background: var(--deep); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; padding: 12px 16px 0; max-height: 64vh; overflow-y: auto; overscroll-behavior: contain; margin-top: -14px; position: relative; z-index: 2; }
+.sheet { background: var(--deep); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; padding: 12px 16px 16px; max-height: 72%; overflow-y: auto; overscroll-behavior: contain; position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; box-shadow: 0 -18px 40px -10px rgba(5, 6, 15, .8); }
 .sheet h2 { font: 400 24px/1.1 var(--serif); }
 .sheet .sub { color: var(--dim); font-size: 13px; margin-top: 2px; }
 .sheet-head { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
 .x { width: 36px; height: 36px; border-radius: 50%; color: var(--dim); font-size: 20px; flex: none; margin: -4px -6px 0 0; }
 .hint { font: italic 400 19px/1.3 var(--serif); color: var(--dim); }
+/* the voice of the universe: one line under the map */
+.voicebar { background: var(--deep); border-top: 1px solid var(--line); padding: 10px 16px 11px; min-height: 58px; display: grid; align-content: center; gap: 2px; cursor: pointer; }
+.voicebar .voice { font-size: 20px; line-height: 1.22; }
+.voicebar .more { color: var(--amber); font: italic 400 16px/1.25 var(--serif); }
+.voicebar .bits { display: flex; gap: 12px; font-size: 13px; font-weight: 600; }
+.voicebar .new { color: var(--ice); font-weight: 500; }
+.how { margin-top: 10px; font: italic 400 18px/1.3 var(--serif); color: var(--ink); }
+/* the hand's trace, and what it is charging */
+.ink, .fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+.trail { fill: none; stroke: var(--ink); stroke-opacity: .5; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.trail.from { stroke: var(--amber); stroke-opacity: .7; }
+.hover { fill: none; stroke: var(--amber); stroke-width: 2; stroke-dasharray: 4 4; }
+.charge-ring { fill: none; stroke: var(--ink); stroke-opacity: .16; stroke-width: 5; }
+.charge-arc { fill: none; stroke: var(--amber); stroke-width: 5; stroke-linecap: round; }
+.charge-arc.cool { stroke: var(--ice); } .charge-arc.danger { stroke: var(--coral); }
+.charge-label { fill: var(--amber); font: 700 19px var(--sans); text-anchor: middle; }
+/* the probability pulse: every outcome in a ring, a needle that lands on what happened */
+.pulse { position: absolute; width: 92px; height: 92px; margin: -46px 0 0 -46px; transition: opacity .45s; }
+.pulse svg { width: 92px; height: 92px; display: block; overflow: visible; }
+.pulse .arc { fill: none; stroke-width: 7; transition: opacity .35s; }
+.pulse .arc.unseen { stroke-opacity: .55; }
+.pulse .spin { transform-origin: 46px 46px; }
+.pulse .spin line { stroke: var(--ink); stroke-width: 2; } .pulse .spin circle { fill: var(--ink); }
+.pulse.done .arc:not(.chosen) { opacity: .16; }
+.pulse .cap { position: absolute; left: 50%; top: 96px; transform: translateX(-50%); background: color-mix(in srgb, var(--night) 88%, transparent); border: 1px solid var(--line); border-radius: 10px; padding: 5px 10px; white-space: nowrap; font-size: 13px; display: flex; gap: 8px; align-items: baseline; opacity: 0; transition: opacity .25s; }
+.pulse .cap span { color: var(--amber); font-weight: 700; }
+.pulse.done .cap, .pulse.fail .cap { opacity: 1; }
+.pulse.fail { height: 0; } .pulse.fail .cap { top: 18px; white-space: normal; width: max-content; max-width: 220px; border-color: var(--coral); color: var(--coral); text-align: center; }
+.pulse.out { opacity: 0; }
+.ghost { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; opacity: 0; }
+.g-pop { animation: gpop .6s ease-out; } .g-swell { animation: gswell 2.2s ease-in-out; } .g-draw { stroke-dasharray: 100; stroke-dashoffset: 100; animation: gdraw 2.2s ease-in-out; }
+@keyframes gpop { 0% { opacity: .5; r: 4px; } 100% { opacity: 0; r: 22px; } }
+@keyframes gswell { 0% { opacity: 0; r: 6px; } 60% { opacity: .4; r: 26px; } 100% { opacity: 0; r: 26px; } }
+@keyframes gdraw { 0% { opacity: .45; stroke-dashoffset: 100; } 70% { opacity: .45; stroke-dashoffset: 0; } 100% { opacity: 0; stroke-dashoffset: 0; } }
+/* the gesture codex */
+.gest { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.gest b { font: 400 22px/1.1 var(--serif); } .gest .lv { font-weight: 600; text-align: right; }
+.gest .howto { color: var(--dim); font-size: 14px; grid-column: 1 / -1; }
+.gest .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 6px; }
+.gest .bar i { display: block; height: 100%; background: var(--amber); }
+.gest .effect { color: var(--faint); font-size: 13px; grid-column: 1 / -1; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 4px; }
 .stats > div { background: var(--rise); border-radius: 10px; padding: 5px 10px 6px; }
 .stats dt { font-size: 11px; color: var(--dim); }
@@ -141,7 +182,8 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 .actbar { position: sticky; bottom: 0; margin: 12px -16px 0; padding: 10px 16px 12px; background: linear-gradient(to top, var(--deep) 78%, transparent); }
 .sheet > :last-child:not(.actbar) { margin-bottom: 16px; }
 .act em { font-style: normal; font-weight: 500; opacity: .7; }
-.result { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--rise); border-left: 3px solid var(--c, var(--ink)); }
+.result .poss-title { margin-bottom: 4px; }
+.result { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--rise); border-left: 3px solid var(--c, var(--ink)); }
 .result { scroll-margin-bottom: 96px; }
 .result .voice { font-size: 22px; line-height: 1.22; }
 .result .more { margin-top: 6px; color: var(--amber); font: italic 400 18px/1.3 var(--serif); }
@@ -211,6 +253,7 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 .toast.law { border-color: var(--ice); }
 .toast b { display: block; font-size: 11px; font-weight: 600; color: var(--ice); }
 .toast .law { font-size: 17px; }
+.toast .t { display: block; font-size: 11px; color: var(--ice); margin-top: 2px; }
 @keyframes toast { 0% { opacity: 0; transform: translateY(-6px); } 6%, 88% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 .veil { position: fixed; inset: 0; z-index: 20; background: var(--night); display: grid; place-items: center; padding: 30px; text-align: center; }
 .veil p { font: italic 400 clamp(26px, 6.5vw, 40px)/1.2 var(--serif); max-width: 15em; opacity: 0; transition: opacity 1.4s; }
@@ -224,8 +267,7 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 .bigstat { font: 400 44px/1 var(--serif); color: var(--amber); }
 
 @media (min-width: 900px) {
-  .universe { grid-template-rows: 1fr; grid-template-columns: 1fr 400px; }
-  .sheet { margin: 0; border-radius: 0; border-top: 0; border-left: 1px solid var(--line); max-height: none; padding: 20px 20px 0; }
+  .sheet { left: auto; top: 0; width: 400px; max-height: none; border-radius: 0; border-top: 0; border-left: 1px solid var(--line); padding: 20px; }
   .actbar { margin: 12px -20px 0; padding: 10px 20px 16px; }
   .modal { align-items: center; } .modal-card { border-radius: 18px; }
   .dock { display: grid; grid-template-columns: 1fr auto; align-items: center; }

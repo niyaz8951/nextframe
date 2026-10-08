@@ -1,7 +1,7 @@
 // THE INTERACTION ENGINE
 // state + rules + interaction -> possibilities -> outcome -> new state
 import type { DB, Q } from '../db.js';
-import { ACTIONS, LAW_EMERGENCE as EM, LAW_ENTROPY, LAW_TIME, TYPES, level, rankOf, type Ctx } from './laws.js';
+import { ACTIONS, GESTURES, LAW_EMERGENCE as EM, LAW_ENTROPY, LAW_TIME, MASTERY, TYPES, gesturesOf, level, masteryOf, rankOf, type Ctx } from './laws.js';
 import { calculateOutcomes, select, type Distribution } from './probability.js';
 import { makeSeed, roll } from './rng.js';
 import type { Obj } from './simulate.js';
@@ -13,7 +13,6 @@ import { addKnowledge, evaluateDiscoveries } from './discoveries.js';
 
 type O = Obj & Holder;
 export interface Input { userId: number; type: string; objectId?: number; targetId?: number; focus?: number; amount?: number; gx?: number; gy?: number; x?: number; y?: number }
-const REACH = 320;
 const DISRUPTIVE = new Set(['touch', 'energize', 'draw', 'connect', 'separate', 'unmake', 'create']);
 
 export const snap = (o: Obj | null) => o && { id: o.id, type: o.type, state: o.state, energy: o.energy, stability: round(o.stability), information: o.information, complexity: complexityOf(o) };
@@ -32,6 +31,7 @@ export function viewObject(o: Obj, lvl: number, tick: number, regionEntropy: num
 export const publicUser = (u: any) => ({
   id: u.id, username: u.username, energy: u.energy + regenDue(u), knowledge: u.knowledge, influence: u.influence, rank: rankOf(u),
   location: u.current_location, lifeStartedTick: u.life_started_tick, lifeState: u.life_state,
+  gestures: gesturesOf(u.stats), capacity: MASTERY.capacity(u.stats),
   domains: Object.fromEntries(Object.entries(u.domains || {}).map(([k, v]) => [k, { points: v, level: level(v as number) }])),
 });
 
@@ -53,6 +53,7 @@ async function loadUser(q: Q, id: number, lock: boolean) {
   const [u] = await q(`SELECT * FROM users WHERE id = $1 ${lock ? 'FOR UPDATE' : ''}`, [id]);
   if (!u) throw new GameError(401, 'Unknown observer.');
   u.key = `observer:${u.id}`;
+  u.cap = MASTERY.capacity(u.stats);
   return u as any & Holder;
 }
 const knows = async (q: Q, userId: number, region: string) => (await q('SELECT 1 AS x FROM user_regions WHERE user_id = $1 AND region_id = $2', [userId, region])).length > 0;
@@ -68,8 +69,10 @@ async function buildContext(frame: Frame, user: any, input: Input) {
   const action = ACTIONS[input.type];
   if (!action) throw new GameError(400, 'Unknown interaction.');
   const focus = action.focusable ? clamp(Math.floor(Number(input.focus) || 1), 1, 3) : 1;
-  let amount = action.amounts ? Number(input.amount ?? action.amounts[0]) : 0;
-  if (action.amounts && !action.amounts.includes(amount)) throw new GameError(400, 'That amount is not allowed.');
+  const mastery = masteryOf(user.stats, input.type);
+  const allowed = action.amounts ? MASTERY.amounts(input.type, action.amounts, mastery) : null;
+  let amount = allowed ? Number(input.amount ?? allowed[0]) : 0;
+  if (allowed && !allowed.includes(amount)) throw new GameError(400, 'That amount is not allowed.');
 
   let obj: O | null = null, target: O | null = null, region: any = null, bonds: any[] = [], observers = 0, regionExists = false;
   let point: { x: number; y: number } | null = null, cell: { gx: number; gy: number } | null = null;
@@ -90,7 +93,7 @@ async function buildContext(frame: Frame, user: any, input: Input) {
     if (!target || target.state === 'merged') throw new GameError(404, 'There is nothing there to connect to.');
     if (target.id === obj!.id) throw new GameError(400, 'An object cannot be connected to itself.');
     if (!(await knows(q, user.id, target.region_id))) throw new GameError(403, 'You have not explored that region.');
-    if (Math.hypot(target.x - obj!.x, target.y - obj!.y) > REACH) throw new GameError(400, 'They are too far apart to connect.');
+    if (Math.hypot(target.x - obj!.x, target.y - obj!.y) > MASTERY.reach(mastery)) throw new GameError(400, 'They are too far apart to connect.');
     if (await frame.settle(target)) return { decayed: target, action };
     if (target.type === 'remnant') throw new GameError(400, 'A remnant cannot be connected.');
   }
@@ -122,14 +125,14 @@ async function buildContext(frame: Frame, user: any, input: Input) {
   if (input.type === 'separate' && !bonds.length && !split) throw new GameError(400, 'There is nothing here to separate.');
   const existing = target ? bonds.find((b) => b.other_id === target!.id) : null;
   const simple = (o: Obj | null) => !!o && (o.type === 'particle' || o.type === 'cluster');
-  const cost = action.cost * focus + (input.type === 'energize' ? amount : 0);
+  const cost = MASTERY.cost(input.type, action.cost, mastery) * focus + (input.type === 'energize' ? amount : 0);
 
   const ctx: Ctx = {
     action: input.type,
     type: obj?.type ?? 'void', state: obj?.state ?? 'none', stability: obj ? round(obj.stability) : 50, energy: obj?.energy ?? 0,
     complexity: obj ? complexityOf(obj) : 0, information: obj?.information ?? 0,
     regionEntropy: round(region?.entropy ?? LAW_ENTROPY.baseline), regionState: region?.state ?? 'calm', converged: !!region?.converged,
-    globalEntropy: round(frame.u.entropy, 2), observers, focus, amount,
+    globalEntropy: round(frame.u.entropy, 2), observers, focus, amount, mastery,
     hasNextForm: !!obj && !!nextForm({ type: obj.type, energy: obj.energy + (input.type === 'energize' ? amount : 0), props: obj.props }, bondedToStar),
     canSplit: split, bonds: bonds.length, bondedToStar,
     targetType: target?.type ?? null, canMerge: simple(obj) && simple(target), existingBond: !!existing, regionExists,
@@ -141,7 +144,7 @@ async function obsLevel(q: Q, userId: number, objectId: number) {
   const [r] = await q('SELECT level FROM observations WHERE user_id = $1 AND object_id = $2', [userId, objectId]);
   return r ? Number(r.level) : 0;
 }
-const exactFor = async (q: Q, user: any, obj: Obj | null) => (obj ? (await obsLevel(q, user.id, obj.id)) >= 2 : false) || level(user.domains?.probability || 0) >= 4;
+const exactFor = async (q: Q, user: any, obj: Obj | null) => (obj ? (await obsLevel(q, user.id, obj.id)) >= 2 : false) || level(user.domains?.probability || 0) >= 4 || MASTERY.exactOdds(user.stats);
 
 // What could happen? (read-only; changes nothing)
 export async function possibilities(db: DB, input: Input) {
@@ -308,11 +311,11 @@ export async function interact(db: DB, input: Input) {
 
       case 'create:particle': case 'create:dust': case 'create:field': {
         frame.move(user, frame.vac, 5, 'effort');
-        const made = await frame.spawn({ type: outcome, x: bc.point!.x, y: bc.point!.y, from: user, energy: 20, stability: 45 + roll(seed, 'c-stab') * 30, owner: user.id, why: 'creation' });
+        const made = await frame.spawn({ type: outcome, x: bc.point!.x, y: bc.point!.y, from: user, energy: cost - 5, stability: 45 + roll(seed, 'c-stab') * 30, owner: user.id, why: 'creation' });
         user.stats.created = (user.stats.created || 0) + 1;
         await q('INSERT INTO observations (user_id, object_id, level, count, first_tick) VALUES ($1,$2,2,0,$3) ON CONFLICT DO NOTHING', [user.id, made.id, frame.tick]);
         await frame.event('CREATION', `✦ An observer created a ${TYPES[outcome].label.toLowerCase()}.`, { objectId: made.id, regionId: made.region_id, userId: user.id });
-        say = `Something exists that did not exist one frame ago: a ${TYPES[outcome].label.toLowerCase()}, holding 20 of your energy.`; break;
+        say = `Something exists that did not exist one frame ago: a ${TYPES[outcome].label.toLowerCase()}, holding ${cost - 5} of your energy.`; break;
       }
       case 'create:fizzle': frame.move(user, frame.vac, cost, 'effort'); say = 'It faded before it formed. The energy returned to the vacuum.'; break;
 
@@ -379,7 +382,13 @@ export async function interact(db: DB, input: Input) {
     const firstTime = !user.witnessed?.[key];
     if (firstTime) { user.witnessed = { ...user.witnessed, [key]: frame.tick }; addKnowledge(user, action.domain, 1); }
     const s = user.stats;
+    const rankBefore = rankOf(user), masteryBefore = masteryOf(s, input.type);
     s.total += 1; s.actions[input.type] = (s.actions[input.type] || 0) + 1; s.outcomes[key] = (s.outcomes[key] || 0) + 1;
+    // The first time a gesture works, the observer learns that it exists.
+    const firstGesture = s.actions[input.type] === 1 ? { key: input.type, name: GESTURES[input.type].name, text: GESTURES[input.type].first } : null;
+    if (firstGesture) addKnowledge(user, action.domain, 1);
+    const masteryUp = masteryOf(s, input.type) > masteryBefore ? { key: input.type, name: GESTURES[input.type].name, level: masteryOf(s, input.type) } : null;
+    user.cap = MASTERY.capacity(s);
     if (focus > 1) s.focused = (s.focused || 0) + 1;
     if (formChanged) s.formChanges = (s.formChanges || 0) + 1;
     if (ctx.stability < 25 && obj && (outcome === 'transform' || outcome === 'split')) s.lowStabChange = (s.lowStabChange || 0) + 1;
@@ -398,7 +407,6 @@ export async function interact(db: DB, input: Input) {
         }
       }
     }
-    const rankBefore = rankOf({ ...user, stats: { ...s, total: s.total - 1 } });
     const newDiscoveries = await evaluateDiscoveries(q, user, frame.tick, obj?.id ?? null);
 
     // the immutable record
@@ -422,7 +430,7 @@ export async function interact(db: DB, input: Input) {
       interactionId: Number(interactionId), universeTick: frame.tick, action: input.type, outcome, outcomeLabel: action.outcomes[outcome], narrative: say, more,
       roll: r, seed, chosen: index, at, distribution: masked, firstTime, energySpent: cost, energyDelta: user.energy - energyBefore,
       before, object: objView, created, region: region ? { id: region.id, num: region.num, gx: region.gx, gy: region.gy } : null,
-      newDiscoveries, events: events.filter((e) => e.impact !== 'minor'), rankUp: rank !== rankBefore ? rank : null, user: publicUser(user),
+      firstGesture, masteryUp, newDiscoveries, events: events.filter((e) => e.impact !== 'minor'), rankUp: rank !== rankBefore ? rank : null, user: publicUser(user),
     };
   });
 }

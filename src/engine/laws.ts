@@ -9,7 +9,7 @@ export interface Ctx {
   type: string; state: string; stability: number; energy: number; complexity: number; information: number;
   regionEntropy: number; regionState: string; converged: boolean; globalEntropy: number;
   observers: number;          // other observers who have interacted with this object
-  focus: number; amount: number;
+  focus: number; amount: number; mastery: number;   // the observer's practice with this gesture
   hasNextForm: boolean; canSplit: boolean; bonds: number; bondedToStar: boolean;
   targetType: string | null; canMerge: boolean; existingBond: boolean;
   regionExists: boolean;
@@ -193,6 +193,7 @@ export const MODIFIERS: Modifier[] = [
   { label: 'A gentle amount of energy', when: (c) => c.amount > 0 && c.amount <= 5, mult: () => ({ absorb: 1.3, clean: 1.3 }) },
   { label: 'Your focus sharpens your intent', when: (c) => c.focus > 1,
     mult: (c) => Object.fromEntries((ACTIONS[c.action].primary || []).map((o) => [o, 1 + 0.7 * (c.focus - 1)])) },
+  { label: 'Your practice with this gesture', when: (c) => c.mastery > 0 && !!MASTERY_ODDS[c.action], mult: (c) => MASTERY_ODDS[c.action](c.mastery) },
   { label: 'Other observers have influenced this', when: (c) => c.observers > 0,
     mult: (c) => ({ anomaly: 1 + 0.1 * Math.min(c.observers, 5), transform: 1 + 0.05 * Math.min(c.observers, 10), deep: 1 + 0.1 * Math.min(c.observers, 10) }) },
   { label: 'High local entropy', when: (c) => c.regionEntropy > 35, mult: () => ({ ...BAD, anomaly: 1.5 }) },
@@ -226,17 +227,60 @@ export function eligibility(c: Ctx): Weights {
 export const KNOWLEDGE_DOMAINS = ['energy', 'entropy', 'probability', 'gravity', 'life'];
 export const level = (points: number) => Math.floor(Math.sqrt((points || 0) / 3));
 
-export const RANKS = [
-  { title: 'Unknown Observer', test: () => true },
-  { title: 'Explorer', test: (s: any) => (s.actions?.explore || 0) >= 1 && s.total >= 10 },
-  { title: 'Interactor', test: (s: any) => s.total >= 50 },
-  { title: 'Creator', test: (s: any) => s.total >= 50 && (s.created || 0) >= 3 },
-  { title: 'Architect', test: (s: any, u: any) => s.total >= 150 && u.influence >= 25 },
-  { title: 'Cosmic Observer', test: (s: any, u: any) => s.total >= 500 && u.knowledge >= 80 && u.influence >= 100 },
-];
-export function rankOf(u: { stats: any; influence: number; knowledge: number }) {
-  const s = { total: 0, ...u.stats };
-  let r = RANKS[0].title;
-  for (const k of RANKS) if (k.test(s, u)) r = k.title;
-  return r;
+// ---- GESTURES AND MASTERY --------------------------------------------------------
+// Every action is performed by a gesture on the map. Each gesture has its own mastery,
+// earned only by using it. Precision, speed and device quality are never measured.
+export const GESTURES: Record<string, { name: string; title: string; first: string }> = {
+  observe:   { name: 'Observe',        title: 'Observer',     first: 'You looked at it, and looking was an act.' },
+  touch:     { name: 'Touch',          title: 'Experimenter', first: 'You touched it. It felt that.' },
+  energize:  { name: 'Give energy',    title: 'Star-Maker',   first: 'You poured energy into it.' },
+  draw:      { name: 'Draw energy',    title: 'Channeler',    first: 'You pulled energy out of it.' },
+  connect:   { name: 'Connect',        title: 'Weaver',       first: 'You connected two things.' },
+  separate:  { name: 'Separate',       title: 'Divider',      first: 'You pulled something apart.' },
+  stabilize: { name: 'Stabilise',      title: 'Stabilist',    first: 'You drew a boundary around it, and it held.' },
+  unmake:    { name: 'Unmake',         title: 'Unmaker',      first: 'You tried to scratch something out of existence.' },
+  create:    { name: 'Create',         title: 'Maker',        first: 'You held your attention on nothing until it became something.' },
+  explore:   { name: 'Explore',        title: 'Explorer',     first: 'You pushed into a place that had no state.' },
+  signal:    { name: 'Call',           title: 'Caller',       first: 'You knocked, to see if anything would answer.' },
+  sign:      { name: 'Leave a signal', title: 'Sign-Bearer',  first: 'You left a mark for whatever might read it.' },
+};
+export const MASTERY_STEPS = [6, 18, 45, 110, 260, 600];   // uses needed to reach levels 1..6
+export const masteryLevel = (uses: number) => MASTERY_STEPS.filter((n) => (uses || 0) >= n).length;
+export const usesOf = (stats: any, key: string) => (key === 'sign' ? stats?.signals || 0 : stats?.actions?.[key] || 0);
+export const masteryOf = (stats: any, key: string) => masteryLevel(usesOf(stats, key));
+
+// What practice changes. L is the mastery level of the gesture being used.
+export const MASTERY_ODDS: Record<string, (L: number) => Weights> = {
+  observe:   (L) => ({ deep: 1 + 0.15 * L, elusive: 1 - 0.12 * L }),
+  touch:     (L) => ({ stabilize: 1 + 0.06 * L }),
+  energize:  (L) => ({ absorb: 1 + 0.08 * L, excite: 1 - 0.08 * L }),
+  draw:      (L) => ({ clean: 1 + 0.08 * L, leak: 1 - 0.1 * L, collapse: 1 - 0.08 * L }),
+  connect:   (L) => ({ bond: 1 + 0.1 * L, repel: 1 - 0.08 * L }),
+  separate:  (L) => ({ break: 1 + 0.1 * L }),
+  stabilize: (L) => ({ settle: 1 + 0.08 * L, lock: 1 + 0.1 * L, backfire: 1 - 0.1 * L }),
+  unmake:    (L) => ({ unmade: 1 + 0.1 * L }),
+  create:    (L) => ({ fizzle: 1 - 0.12 * L, dust: 1 + 0.06 * L, field: 1 + 0.06 * L }),
+  explore:   (L) => ({ structure: 1 + 0.15 * L, empty: 1 - 0.1 * L }),
+  signal:    (L) => ({ adapts: 1 + 0.12 * L, reply: 1 + 0.15 * L, silence: 1 - 0.06 * L }),
+};
+export const MASTERY = {
+  cost: (action: string, base: number, L: number) => (action === 'stabilize' ? Math.max(5, base - L) : action === 'create' ? Math.max(13, base - 2 * L) : base),
+  amounts: (action: string, base: number[], L: number) => (action === 'energize' ? [...base, ...(L >= 3 ? [80] : []), ...(L >= 5 ? [160] : [])] : base),
+  reach: (L: number) => 320 + 30 * L,                    // how far apart two things can be and still be connected
+  capacity: (stats: any) => LAW_ENERGY_CONSERVATION.observerCap + 40 * masteryOf(stats, 'draw'),
+  exactOdds: (stats: any) => masteryOf(stats, 'observe') >= 3,
+};
+
+// An observer is known by the gesture they have practised most.
+export function rankOf(u: { stats: any }) {
+  let best = 'Unknown Observer', top = 0;
+  for (const [key, g] of Object.entries(GESTURES)) {
+    const uses = usesOf(u.stats, key), score = masteryLevel(uses) * 100000 + uses;
+    if (masteryLevel(uses) >= 1 && score > top) { top = score; best = g.title; }
+  }
+  return best;
 }
+export const gesturesOf = (stats: any) => Object.entries(GESTURES).filter(([k]) => usesOf(stats, k) > 0).map(([key, g]) => {
+  const uses = usesOf(stats, key), lvl = masteryLevel(uses);
+  return { key, name: g.name, title: g.title, uses, level: lvl, next: MASTERY_STEPS[lvl] ?? null, prev: lvl ? MASTERY_STEPS[lvl - 1] : 0 };
+});

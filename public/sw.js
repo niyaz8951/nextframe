@@ -1,7 +1,7 @@
 // Service worker: makes the game installable and lets the shell open instantly.
 // The universe itself is never cached - every /api call goes to the server.
-const CACHE = 'tnf-shell-v1';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
+const CACHE = 'tnf-shell-v2';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'gesture.js', 'config.js', 'manifest.webmanifest',
   'fonts/instrument-serif-latin-400-normal.woff2', 'fonts/instrument-serif-latin-400-italic.woff2', 'fonts/familjen-grotesk-latin-wght-normal.woff2',
   'icons/icon-192.png'];
 

@@ -118,6 +118,17 @@ const [nova] = await db.q(`SELECT (SELECT COUNT(*) FROM events WHERE event_type 
 check(Number(nova.n) >= 1 && Number(nova.dust) >= 2 && Number(nova.era) >= 2, 'a spent star dies and scatters enriched dust', `${nova.n} supernova, ${nova.dust} enriched clouds, era ${nova.era}`);
 check(await conserved(), 'energy is conserved after a supernova');
 
+// --- practice: each gesture has its own mastery, earned only by use ---------------
+{
+  const { publicUser } = await import('../src/engine/interact.js');
+  const [row] = await db.q('SELECT * FROM users WHERE id = $1', [A.id]);
+  const pu = publicUser(row);
+  const top = pu.gestures.slice().sort((x: any, y: any) => y.uses - x.uses)[0];
+  check(pu.gestures.length >= 8 && top.level >= 1 && pu.rank !== 'Unknown Observer', 'gestures are discovered by use and mastery grows with practice', `${pu.gestures.length} found; most practised: ${top.name} ×${top.uses} (level ${top.level}); title: ${pu.rank}`);
+  const [m] = await db.q(`SELECT COUNT(*) AS n FROM interactions WHERE (probability_data->'ctx'->>'mastery')::int > 0 AND probability_data->'modifiers' ? 'Your practice with this gesture'`);
+  check(Number(m.n) > 0, 'practice bends the odds of the gesture practised', `${m.n} interactions were shaped by mastery`);
+}
+
 // --- finding each other: signal -> echo -> answer --------------------------------
 {
   const express = (await import('express')).default;

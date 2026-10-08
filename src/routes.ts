@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import type { DB } from './db.js';
 import { login, register, requireAuth } from './auth.js';
-import { ACTIONS, ERAS, KNOWLEDGE_DOMAINS, LAW_ENERGY_CONSERVATION as EC, REGION_SIZE, TYPES, level, rankOf } from './engine/laws.js';
+import { ACTIONS, ERAS, GESTURES, MASTERY_STEPS, KNOWLEDGE_DOMAINS, LAW_ENERGY_CONSERVATION as EC, REGION_SIZE, TYPES, level, rankOf } from './engine/laws.js';
 import { DISCOVERIES } from './engine/discoveries.js';
 import { interact, possibilities, publicUser, verify, viewObject } from './engine/interact.js';
 import { GameError, labelOf } from './engine/world.js';
@@ -28,7 +28,7 @@ export function api(db: DB) {
   r.post('/auth/login', authLimit, wrap(async (req) => login(db, req.body)));
   r.get('/laws', wrap(async () => ({
     actions: Object.fromEntries(Object.entries(ACTIONS).map(([k, a]) => [k, { label: a.label, cost: a.cost, needs: a.needs, amounts: a.amounts, focusable: !!a.focusable, domain: a.domain }])),
-    regionSize: REGION_SIZE, domains: KNOWLEDGE_DOMAINS, observerCap: EC.observerCap, regenCap: EC.regenCap, regenSeconds: EC.regenSeconds,
+    regionSize: REGION_SIZE, domains: KNOWLEDGE_DOMAINS, gestureCount: Object.keys(GESTURES).length, masterySteps: MASTERY_STEPS, observerCap: EC.observerCap, regenCap: EC.regenCap, regenSeconds: EC.regenSeconds,
   })));
 
   r.use(requireAuth);

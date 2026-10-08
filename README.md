@@ -43,19 +43,45 @@ Genesis runs exactly once. Starting the server again never regenerates anything.
 
 ## How to play
 
-1. Begin a life. You arrive at the current universe tick with 100 energy.
-2. Tap a dotted circle. It is something you have never observed.
-3. Pick an action. The coloured bar shows everything that could happen and how
-   likely each outcome is. Outcomes you have never witnessed are unnamed, and the
-   odds are blurred until you have observed the object more closely.
-4. Act. A needle sweeps the bar and stops where the roll fell. The world changes.
-5. Change the amount of energy or your focus and watch the odds shift before you commit.
-6. Tap a dashed region to explore it. Tap empty space to create something.
-7. Leave. Come back. See what the universe and the other observers did meanwhile.
+There are no action buttons. You act on the map with your hands, and only the
+first gesture is ever hinted. The rest you find by trying things; now and then a
+faint ghost trace shows a motion without saying what it does.
 
-Things worth trying: feed the dormant core at the origin with other players; connect
-two particles; bond something to the old star next door; observe the same object
-until its odds become exact; press "Re-derive it" after any outcome.
+| Gesture | Action | With a mouse |
+| --- | --- | --- |
+| Tap | Observe | Click |
+| Double tap | Touch | Double click |
+| Press and hold on a thing | Give energy; longer gives more | Click and hold |
+| Swipe away from a thing | Draw energy; further takes more | Drag away from it |
+| Drag one thing onto another | Connect | Same |
+| Pull two fingers apart on a thing | Separate | Shift + drag away |
+| Draw a circle around a thing | Stabilise | Same |
+| Scribble over a thing, then keep the finger down | Unmake | Same |
+| Press and hold on empty space | Create | Same |
+| Flick into a dashed region, or hold on it | Explore | Same |
+| Triple tap a living thing | Call | Triple click |
+| Two fingers | Move and zoom the map | Right-drag, wheel, arrow keys |
+| Two-finger tap | Open the Study Sheet | Right-click, or S |
+
+Each act shows its odds where your hand was: a ring of every possible outcome, a
+needle that spins and lands where the roll fell, and the name of what happened.
+The Study Sheet has exact odds, statistics, history and signals; nothing in it is
+needed to play. Unmake and Create only commit if you keep holding, and lifting
+early cancels them.
+
+**Mastery.** Every gesture has its own level, earned only by using it (6, 18, 45,
+110, 260 and 600 uses). Precision, speed and device are never measured. Practice
+improves that gesture's odds and, for some, its cost, reach, capacity or maximum
+amount; the rules are `MASTERY_ODDS` and `MASTERY` in `src/engine/laws.ts`. Your
+title comes from the gesture you have practised most: Observer, Star-Maker,
+Channeler, Weaver, Stabilist, Explorer, Caller, Sign-Bearer and others.
+
+Client code: `public/gesture.js` recognises gestures and knows nothing about the
+game; `public/app.js` maps them to actions (`resolve`), runs them (`perform`) and
+draws the feedback (`probabilityPulse`).
+
+Not built yet: drawing glyphs to leave a signal (signals still use the picker in
+the Study Sheet), rhythm tapping, and key remapping.
 
 ## How the engine works
 

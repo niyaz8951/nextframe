@@ -1,3 +1,5 @@
+import { attachGestures } from './gesture.js';
+
 // THE NEXT FRAME - client. It draws what the server says is real and asks the
 // server to act. It never decides an outcome and never holds authoritative state.
 const API = (window.API_BASE || '') + '/api';
@@ -13,7 +15,7 @@ const HUES = ['#f3c969', '#7cc6d6', '#c69cf0', '#f08a7b', '#9be0a8', '#e2e0f0', 
 
 const S = {
   token: store.get('tnf.token'), laws: null, me: null, uni: null, regions: [], frontier: [], objects: new Map(), rels: [], others: [],
-  sel: null, detail: null, action: null, focus: 1, amount: null, target: null, poss: null, result: null, busy: false, firstObject: null,
+  sel: null, detail: null, action: null, focus: 1, amount: null, target: null, poss: null, result: null, busy: false, firstObject: null, pos: new Map(), focusId: null, last: null,
   lastInteraction: 0, lastMajor: 0, view: { cx: 120, cy: 120, k: 1.4 }, tab: 'universe',
 };
 
@@ -75,7 +77,8 @@ async function enter(arrivedTick) {
   await loadUniverse();
   const home = S.regions.find((r) => r.id === S.me.location) || S.regions[0];
   if (home) Object.assign(S.view, { cx: (home.gx + 0.5) * S.laws.regionSize, cy: (home.gy + 0.5) * S.laws.regionSize });
-  fitView(); drawMap(); renderSheet();
+  fitView(); drawMap();
+  say(S.me.gestures.length ? 'The universe kept moving while you were gone.' : 'Something is here that you have never observed. Tap one of the dotted circles.');
   if (arrivedTick) {
     await veil(['Before you existed, the universe was already moving.', `You have arrived at tick ${fmt(arrivedTick)}.`]);
   } else if (me.away.ticks >= 40) showAway(me.away);
@@ -117,12 +120,12 @@ async function pulse() {
     const p = await api(`/universe/pulse?after=${S.lastInteraction}&event=${S.lastEvent || 0}`);
     S.uni.tick = p.tick; S.uni.entropy = p.entropy; S.uni.era = p.era; S.me.energy = p.energy; hud();
     // The universe changes by itself too, so look again when something major happened and every so often regardless.
-    const quiet = !S.result && !S.showCollapsed;
+    const quiet = !queued;
     if (p.lastInteraction === S.lastInteraction && quiet && (p.lastMajorEvent !== S.lastMajor || ++pulses % 5 === 0)) await loadUniverse();
     if (p.lastInteraction !== S.lastInteraction) {
       S.lastInteraction = p.lastInteraction;
       await loadUniverse();
-      if (S.sel?.kind === 'object' && !S.result) refreshDetail();
+      if (S.sel?.kind === 'object') refreshDetail().catch(() => {});
     }
     // Something moved nearby. It may have been an observer. It may have been the universe.
     for (const r of p.ripples) ripple(r.x, r.y, '#c69cf0');
@@ -186,7 +189,7 @@ function drawMap() {
     (sel?.kind === 'point' ? `<circle class="pin" cx="${sel.x}" cy="${sel.y}" r="7"/>` : '');
   $('#L-links').innerHTML = S.rels.map((l) => { const a = S.objects.get(l.a), b = S.objects.get(l.b); return a && b ? `<line class="link" data-a="${a.id}" data-b="${b.id}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${Math.min(3, 0.6 + l.strength * 0.4)}"/>` : ''; }).join('');
   $('#L-objects').innerHTML = [...S.objects.values()].map((o) => {
-    const cls = ['obj', sel?.kind === 'object' && sel.id === o.id ? 'sel' : '', S.target === o.id ? 'tgt' : '', o.stability != null && o.stability < 20 && o.type !== 'remnant' ? 'shaky' : '', !o.known && o.id === S.firstObject && S.me.knowledge === 0 ? 'first' : ''].join(' ');
+    const cls = ['obj', (sel?.kind === 'object' ? sel.id : S.focusId) === o.id ? 'sel' : '', o.stability != null && o.stability < 20 && o.type !== 'remnant' ? 'shaky' : '', !o.known && o.id === S.firstObject && S.me.knowledge === 0 ? 'first' : ''].join(' ');
     return `<g class="${cls}" data-id="${o.id}" transform="translate(${o.x} ${o.y})"><circle class="hit" r="14"/><g class="glyph">${glyph(o)}</g><circle class="ring-sel" r="13"/>${o.sig ? '<path class="sigmark" d="M8 -10 a5 5 0 0 1 5 5 M8 -14 a9 9 0 0 1 9 9"/>' : ''}${o.name ? `<text class="name" y="22">${esc(o.name)}</text>` : ''}</g>`;
   }).join('');
   planOrbits();
@@ -196,7 +199,7 @@ function drawMap() {
 // positions are the real ones, and the orbit passes through them.
 let orbits = [];
 function planOrbits() {
-  orbits = [];
+  orbits = []; S.pos.clear();
   for (const l of S.rels) {
     const a = S.objects.get(l.a), b = S.objects.get(l.b); if (!a || !b) continue;
     const star = a.type === 'star' ? a : b.type === 'star' ? b : null, o = star === a ? b : a;
@@ -213,7 +216,7 @@ function turnOrbits() {
   const t = (Date.now() - t0) / 1000;
   for (const ob of orbits) {
     const ang = ob.a0 + ob.w * t, x = ob.star.x + Math.cos(ang) * ob.r, y = ob.star.y + Math.sin(ang) * ob.r;
-    ob.el?.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+    ob.el?.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`); S.pos.set(ob.id, { x, y });
     for (const ln of ob.lines) { const end = ln.dataset.a == ob.id ? '1' : '2'; ln.setAttribute('x' + end, x.toFixed(1)); ln.setAttribute('y' + end, y.toFixed(1)); }
   }
 }
@@ -231,158 +234,287 @@ function ripple(x, y, color = '#ece9f7', label) {
   }
 }
 
-// pan, pinch, wheel, tap
-const ptr = new Map(); let moved = 0, pinch = 0;
-map.addEventListener('pointerdown', (e) => { if (e.isPrimary) ptr.clear(); ptr.set(e.pointerId, { x: e.clientX, y: e.clientY }); moved = 0; map.setPointerCapture(e.pointerId); });
-map.addEventListener('pointermove', (e) => {
-  const p = ptr.get(e.pointerId); if (!p) return;
-  if (ptr.size === 1) {
-    const dx = e.clientX - p.x, dy = e.clientY - p.y; moved += Math.abs(dx) + Math.abs(dy);
-    if (moved > 6) { S.view.cx -= dx / S.view.k; S.view.cy -= dy / S.view.k; map.classList.add('dragging'); applyView(); }
-  }
-  p.x = e.clientX; p.y = e.clientY;
-  if (ptr.size === 2) {
-    const [a, b] = [...ptr.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinch) zoom(d / pinch); pinch = d; moved = 99;
-  }
-});
-const up = (e) => {
-  const had = ptr.delete(e.pointerId); if (ptr.size < 2) pinch = 0; map.classList.remove('dragging');
-  if (had && e.type === 'pointerup' && moved <= 6 && ptr.size === 0) tap(document.elementFromPoint(e.clientX, e.clientY), e);
-};
-map.addEventListener('pointerup', up); map.addEventListener('pointercancel', up);
-map.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 0.89); }, { passive: false });
-function zoom(f) { S.view.k = Math.max(0.35, Math.min(5, S.view.k * f)); applyView(); }
+// ---------------------------------------------------------------- moving the view
+function zoom(f, px, py) {
+  const k = Math.max(0.35, Math.min(5, S.view.k * f));
+  if (px != null) { const w = toWorld(px, py); S.view.cx = w.x - (w.x - S.view.cx) * (S.view.k / k); S.view.cy = w.y - (w.y - S.view.cy) * (S.view.k / k); }
+  S.view.k = k; applyView();
+}
 $('#zoomIn').onclick = () => zoom(1.3); $('#zoomOut').onclick = () => zoom(0.77);
 $('#recenter').onclick = () => { const g = S.regions.find((x) => x.id === S.me.location) || S.regions[0]; Object.assign(S.view, { cx: (g.gx + 0.5) * R(), cy: (g.gy + 0.5) * R() }); fitView(); applyView(); };
+$('#studyBtn').onclick = () => study(null);
 addEventListener('resize', applyView);
 new ResizeObserver(() => { if (S.laws && !$('#app').hidden) applyView(); }).observe(map);
 
-function tap(el, e) {
-  if (S.busy) return;
-  const g = el?.closest?.('.obj');
-  if (g) {
-    const id = Number(g.dataset.id);
-    if (S.action === 'connect' && S.sel?.kind === 'object' && S.sel.id !== id) { S.target = id; S.result = null; drawMap(); loadPoss(); return; }
-    return select({ kind: 'object', id });
-  }
-  if (el?.classList?.contains('frontier')) return select({ kind: 'cell', gx: Number(el.dataset.gx), gy: Number(el.dataset.gy) });
-  const w = toWorld(e.clientX, e.clientY), gx = Math.floor(w.x / R()), gy = Math.floor(w.y / R());
-  if (S.regions.some((r) => r.gx === gx && r.gy === gy)) return select({ kind: 'point', x: Math.round(w.x), y: Math.round(w.y) });
-  select(null);
+// ---------------------------------------------------------------- GestureManager
+// Tells the recognizer what is under the hand, draws the hand's trace, and turns
+// each recognised gesture into an action. There are no action buttons.
+const wrap = () => $('.mapwrap').getBoundingClientRect();
+const toScreen = (x, y) => { const b = map.getBoundingClientRect(); return { x: b.left + b.width / 2 + (x - S.view.cx) * S.view.k, y: b.top + b.height / 2 + (y - S.view.cy) * S.view.k }; };
+const shown = (o) => S.pos.get(o.id) || o;                         // where an object is drawn (orbiters move)
+const objScreen = (id) => { const o = S.objects.get(id); return o ? toScreen(shown(o).x, shown(o).y) : null; };
+const targetScreen = (t) => (t.kind === 'object' ? objScreen(t.id) || { x: t.sx, y: t.sy } : t.kind === 'frontier' ? toScreen((t.gx + 0.5) * R(), (t.gy + 0.5) * R()) : toScreen(t.x, t.y));
+const inPolygon = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c; } return c; };
+
+const host = {
+  hit(px, py) {
+    let best = null, bd = 28;
+    for (const o of S.objects.values()) { const s = toScreen(shown(o).x, shown(o).y), d = Math.hypot(s.x - px, s.y - py); if (d < bd) { bd = d; best = o; } }
+    if (best) { const s = objScreen(best.id); return { kind: 'object', id: best.id, sx: s.x, sy: s.y }; }
+    const w = toWorld(px, py), gx = Math.floor(w.x / R()), gy = Math.floor(w.y / R());
+    if (S.regions.some((r) => r.gx === gx && r.gy === gy)) return { kind: 'space', x: Math.round(w.x), y: Math.round(w.y) };
+    if (S.frontier.some((c) => c.gx === gx && c.gy === gy)) return { kind: 'frontier', gx, gy };
+    return { kind: 'void' };
+  },
+  enclosed(pts) {
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    let best = null, bd = 1e9;
+    for (const o of S.objects.values()) { const s = toScreen(shown(o).x, shown(o).y); if (!inPolygon(s, pts)) continue; const d = Math.hypot(s.x - cx, s.y - cy); if (d < bd) { bd = d; best = { kind: 'object', id: o.id, sx: s.x, sy: s.y }; } }
+    return best;
+  },
+  near(pts) {
+    let best = null, bd = 30;
+    for (const o of S.objects.values()) { const s = toScreen(shown(o).x, shown(o).y); for (const p of pts) { const d = Math.hypot(s.x - p.x, s.y - p.y); if (d < bd) { bd = d; best = { kind: 'object', id: o.id, sx: s.x, sy: s.y }; } } }
+    return best;
+  },
+  wantsThird(t) { const o = S.objects.get(t.id); return !!o && ['replicator', 'organism', 'ecosystem', 'intelligence', 'anomaly'].includes(o.type); },
+  onPan(dx, dy) { S.view.cx -= dx / S.view.k; S.view.cy -= dy / S.view.k; applyView(); },
+  onZoom: zoom,
+  onTrail(pts, from) {
+    const ink = $('#trail'), b = wrap();
+    if (!pts) { ink.setAttribute('points', ''); return; }
+    ink.setAttribute('points', pts.slice(-160).map((p) => `${(p.x - b.left).toFixed(0)},${(p.y - b.top).toFixed(0)}`).join(' '));
+    ink.classList.toggle('from', !!from);
+  },
+  onHover(t) { const h = $('#hover'); if (!t) return h.setAttribute('r', 0); const s = targetScreen(t), b = wrap(); h.setAttribute('cx', s.x - b.left); h.setAttribute('cy', s.y - b.top); h.setAttribute('r', 20); },
+  onCharge(c) {
+    const ring = $('#charge'), arc = $('#chargeArc'), label = $('#chargeLabel'), b = wrap();
+    if (!c) { ring.setAttribute('r', 0); arc.setAttribute('r', 0); label.textContent = ''; return; }
+    const s = targetScreen(c.target), x = s.x - b.left, y = s.y - b.top, r = 26, C = 2 * Math.PI * r;
+    let f = 0, text = '', cls = '';
+    if (c.kind === 'confirm') { f = Math.min(1, c.ms / c.total); cls = 'danger'; }
+    else if (c.kind === 'spread') { f = c.ms; cls = 'cool'; }
+    else if (c.target.kind === 'object') { const st = chargeStage(c.ms); f = st.progress; text = String(st.amount); }
+    else { const total = c.target.kind === 'frontier' ? HOLD.explore : HOLD.create; f = Math.min(1, c.ms / total); cls = 'cool'; }
+    for (const el of [ring, arc]) { el.setAttribute('cx', x); el.setAttribute('cy', y); el.setAttribute('r', r); }
+    arc.setAttribute('class', 'charge-arc ' + cls); arc.setAttribute('stroke-dasharray', `${f * C} ${C}`); arc.setAttribute('transform', `rotate(-90 ${x} ${y})`);
+    label.setAttribute('x', x); label.setAttribute('y', y - 40); label.textContent = text;
+  },
+  onGesture: (g) => resolve(g),
+};
+attachGestures(map, host);
+
+// Holding longer gives more. Practice with the gesture unlocks longer holds.
+const HOLD = { create: 1200, explore: 750, stages: [450, 1100, 2100, 3400, 5000] };
+function chargeStage(ms) {
+  const lvl = S.me.gestures.find((g) => g.key === 'energize')?.level || 0;
+  const amounts = [5, 15, 40, ...(lvl >= 3 ? [80] : []), ...(lvl >= 5 ? [160] : [])];
+  let i = 0; while (i + 1 < amounts.length && ms >= HOLD.stages[i + 1]) i++;
+  const next = HOLD.stages[i + 1], prev = HOLD.stages[i];
+  return { amount: amounts[i], progress: i + 1 < amounts.length ? Math.min(1, (ms - prev) / (next - prev)) : 1 };
 }
 
-// ---------------------------------------------------------------- selection, possibilities, acting
-async function select(sel) {
-  Object.assign(S, { sel, detail: null, action: null, focus: 1, amount: null, target: null, poss: null, result: null });
-  const so = sel?.kind === 'object' && S.objects.get(sel.id);
-  if (so) { S.view.cx = so.x; S.view.cy = so.y; }
-  drawMap(); renderSheet();
-  if (!sel) return;
+// Gesture -> action. This table is the whole control scheme.
+function resolve(g) {
+  const t = g.target;
+  if (g.type === 'twoTap') return study(t);
+  if (g.type === 'miss') { if (g.len > 140 && !S.toldPan && S.me.knowledge > 0) { S.toldPan = true; say('Two fingers move the map. One finger acts on it.'); } return; }
+  if (!$('#sheet').hidden && g.type === 'tap' && t.kind !== 'object') return closeStudy();
+  const obj = t.kind === 'object' ? { objectId: t.id } : null;
+  switch (g.type) {
+    case 'tap': if (obj) return perform('observe', obj, t); if (t.kind === 'frontier') return ghost('flick', t); return;
+    case 'double': return obj && perform('touch', obj, t);
+    case 'triple': return obj && perform('signal', obj, t);
+    case 'hold':
+      if (obj) return perform('energize', { ...obj, amount: chargeStage(g.ms).amount }, t);
+      if (t.kind === 'space' && g.ms >= HOLD.create) return perform('create', { x: t.x, y: t.y }, t);
+      if (t.kind === 'frontier' && g.ms >= HOLD.explore) return perform('explore', { gx: t.gx, gy: t.gy }, t);
+      return;
+    case 'swipe': return g.shift ? perform('separate', obj, t) : perform('draw', { ...obj, amount: g.len < 95 ? 5 : g.len < 180 ? 15 : 40 }, t);
+    case 'drag': return perform('connect', { ...obj, target: g.onto.id }, g.onto);
+    case 'spread': return perform('separate', obj, t);
+    case 'circle': return perform('stabilize', obj, t);
+    case 'scribble': return perform('unmake', obj, t);
+    case 'flick': return perform('explore', { gx: t.gx, gy: t.gy }, t);
+  }
+}
+
+// ---------------------------------------------------------------- ActionExecutionPipeline
+// gesture -> server decides -> mastery and discovery -> feedback at the point of contact -> world reloads
+let chain = Promise.resolve(), queued = 0;
+function perform(type, args, target) {
+  if (queued >= 4) return;
+  queued++; ripple(...Object.values(toWorldOf(target)));
+  chain = chain.then(() => run(type, args, target)).finally(() => queued--);
+}
+const toWorldOf = (t) => (t.kind === 'object' ? (() => { const o = S.objects.get(t.id); return o ? { x: shown(o).x, y: shown(o).y } : { x: 0, y: 0 }; })() : t.kind === 'frontier' ? { x: (t.gx + 0.5) * R(), y: (t.gy + 0.5) * R() } : { x: t.x, y: t.y });
+async function run(type, args, target) {
+  S.busy = true;
   try {
-    if (sel.kind === 'object') { await refreshDetail(); S.action = S.detail.object.level < 4 ? 'observe' : S.detail.actions.includes('touch') ? 'touch' : 'observe'; }
-    if (sel.kind === 'cell') S.action = 'explore';
-    if (sel.kind === 'point') S.action = 'create';
+    const r = args.objectId ? await api(`/objects/${args.objectId}/interact`, { body: { type, amount: args.amount, target: args.target } })
+      : type === 'explore' ? await api('/universe/explore', { body: { gx: args.gx, gy: args.gy } }) : await api('/universe/create', { body: { x: args.x, y: args.y } });
+    S.me = r.user; hud();
+    if (r.decayed) { say(r.narrative); await loadUniverse(); return; }
+    S.lastInteraction = Math.max(S.lastInteraction, r.interactionId);
+    S.uni.tick = r.universeTick;
+    const focusId = args.target && type === 'connect' ? args.objectId : args.objectId ?? r.created[0]?.id ?? null;
+    if (focusId) S.focusId = focusId;
+    S.last = { ...r, objectId: args.objectId ?? null };
+    probabilityPulse(target, r);
+    voice(r);
+    if (r.firstGesture) { toast(`<b>${esc(r.firstGesture.name)}</b><span class="law">${esc(r.firstGesture.text)}</span><span class="t">Knowledge +1</span>`, 'law'); if (S.tab === 'discover') discover($('#view-discover')); }
+    if (r.masteryUp) toast(`<b>Practice</b><span class="law">${esc(r.masteryUp.name)} has reached level ${r.masteryUp.level}.</span>`, 'law');
+    for (const d of r.newDiscoveries) toast(`<b>Discovery</b><span class="law">${esc(d.text)}</span>`, 'law');
+    for (const e of r.events) toast(esc(e.description));
+    if (r.rankUp) toast(`<b>You have changed</b><span class="law">You are now: ${esc(r.rankUp)}</span>`, 'law');
+    if (r.events.length) S.lastMajor = Math.max(S.lastMajor, ...r.events.map((e) => e.id));
+    await loadUniverse();
+    if (S.sel) { if (S.sel.kind === 'object') await refreshDetail().catch(() => {}); loadPoss(); }
+  } catch (err) { failPulse(target, err.message); }
+  finally { S.busy = false; }
+}
+
+// ---------------------------------------------------------------- ContextualProbabilityFeedback
+// The odds appear where the hand was: a ring of every outcome, a needle that spins
+// and lands where the roll fell, and the name of what happened. Then it fades.
+function place(el, target) {
+  const s = targetScreen(target), b = wrap();
+  el.style.left = Math.max(56, Math.min(b.width - 56, s.x - b.left)) + 'px';
+  el.style.top = Math.max(56, Math.min(b.height - 74, s.y - b.top)) + 'px';
+  $('#fx').append(el);
+}
+function probabilityPulse(target, r) {
+  const el = document.createElement('div'); el.className = 'pulse';
+  const R0 = 34, C = 2 * Math.PI * R0, d = r.distribution;
+  let acc = 0;
+  const arcs = d.outcomes.map((o, i) => { const a = `<circle class="arc${i === r.chosen ? ' chosen' : ''}${o.label ? '' : ' unseen'}" cx="46" cy="46" r="${R0}" stroke="${HUES[i % HUES.length]}" stroke-dasharray="${Math.max(0, o.p * C - 2)} ${C}" stroke-dashoffset="${-acc * C}"/>`; acc += o.p; return a; }).join('');
+  const before = d.outcomes.slice(0, r.chosen).reduce((s, o) => s + o.p, 0), deg = (before + d.outcomes[r.chosen].p * Math.min(0.95, Math.max(0.05, r.at))) * 360;
+  el.innerHTML = `<svg viewBox="0 0 92 92"><g transform="rotate(-90 46 46)">${arcs}</g><g class="spin"><line x1="46" y1="46" x2="46" y2="6"/><circle cx="46" cy="6" r="3.2"/></g></svg>
+    <div class="cap"><b>${esc(r.outcomeLabel)}</b><span>${pct(d.outcomes[r.chosen].p, d.exact)}</span></div>`;
+  place(el, target);
+  const spin = el.querySelector('.spin');
+  const land = () => { spin.style.transform = `rotate(${deg}deg)`; el.classList.add('done'); };
+  if (calm) land(); else spin.animate([{ transform: 'rotate(0deg)' }, { transform: `rotate(${720 + deg}deg)` }], { duration: 850, easing: 'cubic-bezier(.15,.6,.2,1)' }).finished.then(land);
+  setTimeout(() => el.classList.add('out'), 2300); setTimeout(() => el.remove(), 2800);
+}
+function failPulse(target, message) {
+  const el = document.createElement('div'); el.className = 'pulse fail'; el.innerHTML = `<div class="cap"><b>${esc(message)}</b></div>`;
+  place(el, target); setTimeout(() => el.classList.add('out'), 1900); setTimeout(() => el.remove(), 2400);
+}
+// The line at the bottom: what the universe just said.
+function say(text) { $('#voice').innerHTML = `<p class="hint">${esc(text)}</p>`; }
+function voice(r) {
+  const d = r.energyDelta, bits = [
+    d ? `<span class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d} energy</span>` : '',
+    r.firstTime ? '<span class="new">a new outcome, knowledge +1</span>' : '',
+  ].filter(Boolean).join('');
+  $('#voice').innerHTML = `<p class="voice">${esc(r.narrative)}</p>${r.more ? `<p class="more">${esc(r.more)}</p>` : ''}${bits ? `<p class="bits">${bits}</p>` : ''}`;
+}
+$('#voice').onclick = () => study(null);
+
+// Ghost traces: now and then the universe shows a motion, never what it does.
+const GHOSTS = [['touch', 'double'], ['energize', 'hold'], ['explore', 'flick'], ['draw', 'swipe'], ['connect', 'drag'], ['create', 'holdEmpty'], ['stabilize', 'circle'], ['unmake', 'scribble']];
+function ghost(kind, t) {
+  if (calm) return;
+  const b = wrap(), s = targetScreen(t), x = s.x - b.left, y = s.y - b.top, ns = 'http://www.w3.org/2000/svg';
+  const add = (tag, attrs, cls) => { const el = document.createElementNS(ns, tag); for (const k in attrs) el.setAttribute(k, attrs[k]); el.setAttribute('class', 'ghost ' + cls); $('#ink').append(el); setTimeout(() => el.remove(), 2600); return el; };
+  if (kind === 'double') { add('circle', { cx: x, cy: y, r: 16 }, 'g-pop'); setTimeout(() => add('circle', { cx: x, cy: y, r: 16 }, 'g-pop'), 260); }
+  else if (kind === 'hold' || kind === 'holdEmpty') add('circle', { cx: x, cy: y, r: 24 }, 'g-swell');
+  else if (kind === 'circle') add('circle', { cx: x, cy: y, r: 30, pathLength: 100 }, 'g-draw');
+  else if (kind === 'swipe') add('path', { d: `M${x} ${y} l70 -46`, pathLength: 100 }, 'g-draw');
+  else if (kind === 'scribble') add('path', { d: `M${x - 30} ${y - 14} l60 8 l-60 8 l60 8 l-60 8`, pathLength: 100 }, 'g-draw');
+  else if (kind === 'drag') { const o = [...S.objects.values()].filter((o) => o.id !== t.id).map((o) => ({ o, s: toScreen(shown(o).x, shown(o).y) })).sort((a, c) => Math.hypot(a.s.x - s.x, a.s.y - s.y) - Math.hypot(c.s.x - s.x, c.s.y - s.y))[0]; if (o) add('path', { d: `M${x} ${y} L${o.s.x - b.left} ${o.s.y - b.top}`, pathLength: 100 }, 'g-draw'); }
+  else if (kind === 'flick') { const c = toScreen(S.view.cx, S.view.cy); const near = S.regions.map((g) => toScreen((g.gx + 0.5) * R(), (g.gy + 0.5) * R())).sort((a, c2) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(c2.x - s.x, c2.y - s.y))[0] || c; add('path', { d: `M${near.x - b.left + (s.x - near.x) * 0.45} ${near.y - b.top + (s.y - near.y) * 0.45} L${x} ${y}`, pathLength: 100 }, 'g-draw'); }
+}
+setInterval(() => {
+  if (!S.me || S.tab !== 'universe' || document.hidden || S.busy || !$('#sheet').hidden || !$('#modal').hidden) return;
+  const known = new Set(S.me.gestures.map((g) => g.key));
+  if (!known.has('observe') || (S.me.gestures.find((g) => g.key === 'observe')?.uses || 0) < 3) return;
+  const next = GHOSTS.find(([a]) => !known.has(a) && (a !== 'unmake' || known.size >= 5)); if (!next) return;
+  const b = wrap(), onScreen = (s) => s.x > b.left + 30 && s.x < b.right - 30 && s.y > b.top + 30 && s.y < b.bottom - 30;
+  if (next[1] === 'flick') { const c = S.frontier.find((c) => onScreen(toScreen((c.gx + 0.5) * R(), (c.gy + 0.5) * R()))); return c && ghost('flick', { kind: 'frontier', gx: c.gx, gy: c.gy }); }
+  if (next[1] === 'holdEmpty') { const w = toWorld(b.left + b.width * 0.5, b.top + b.height * 0.3); return host.hit(b.left + b.width * 0.5, b.top + b.height * 0.3).kind === 'space' && ghost('holdEmpty', { kind: 'space', x: w.x, y: w.y }); }
+  const pick = [...S.objects.values()].filter((o) => o.type !== 'remnant' && onScreen(toScreen(shown(o).x, shown(o).y)));
+  if (pick.length) ghost(next[1], { kind: 'object', id: pick[Math.floor(Math.random() * pick.length)].id });
+}, 21000);
+
+// Desktop: S studies the last thing you acted on, arrows move the map, + and - zoom.
+addEventListener('keydown', (e) => {
+  if (e.target.matches?.('input, textarea') || !$('#modal').hidden || S.tab !== 'universe' || !S.me) return;
+  const step = 60 / S.view.k;
+  if (e.key === 's' || e.key === 'S') study(null);
+  else if (e.key === 'Escape') closeStudy();
+  else if (e.key === 'ArrowLeft') host.onPan(60, 0); else if (e.key === 'ArrowRight') host.onPan(-60, 0);
+  else if (e.key === 'ArrowUp') host.onPan(0, 60); else if (e.key === 'ArrowDown') host.onPan(0, -60);
+  else if (e.key === '+' || e.key === '=') zoom(1.2); else if (e.key === '-') zoom(0.83);
+  void step;
+});
+
+// ---------------------------------------------------------------- the Study Sheet
+// Secondary. Exact odds, statistics, history, signals. Nothing here is needed to play.
+const HOW = {
+  observe: 'Tap it.', touch: 'Double tap it.', energize: 'Press and hold on it. Longer gives more.', draw: 'Swipe away from it. Further takes more.',
+  connect: 'Drag it onto something else.', separate: 'Pull two fingers apart on it. With a mouse, hold Shift and drag away from it.', stabilize: 'Draw a circle around it.',
+  unmake: 'Scribble over it, then keep your finger down until it commits.', create: 'Press and hold on empty space.', explore: 'Flick into a dashed region, or press and hold on it.',
+  signal: 'Triple tap a living thing.', sign: 'Open the study sheet on something and leave three glyphs.',
+};
+async function study(t) {
+  if (!t || t.kind === 'void') t = S.focusId && S.objects.has(S.focusId) ? { kind: 'object', id: S.focusId } : null;
+  if (!t) return say('Tap something first. Then you can study it.');
+  const sel = t.kind === 'object' ? { kind: 'object', id: t.id } : t.kind === 'frontier' ? { kind: 'cell', gx: t.gx, gy: t.gy } : { kind: 'point', x: t.x, y: t.y };
+  const known = new Set(S.me.gestures.map((g) => g.key));
+  Object.assign(S, { sel, detail: null, action: null, focus: 1, amount: null, target: null, poss: null, result: null, error: null });
+  if (sel.kind === 'object') S.focusId = sel.id;
+  $('#sheet').hidden = false; drawMap(); renderSheet();
+  try {
+    if (sel.kind === 'object') { await refreshDetail(); S.action = known.has('observe') ? 'observe' : null; }
+    if (sel.kind === 'cell') S.action = known.has('explore') ? 'explore' : null;
+    if (sel.kind === 'point') S.action = known.has('create') ? 'create' : null;
     await loadPoss();
   } catch (err) { S.error = err.message; renderSheet(); }
 }
+function closeStudy() { if ($('#sheet').hidden) return; S.sel = null; $('#sheet').hidden = true; drawMap(); }
 async function refreshDetail() {
   if (S.sel?.kind !== 'object') return;
   const id = S.sel.id, d = await api('/objects/' + id);
   if (S.sel?.kind === 'object' && S.sel.id === id) { S.detail = d; renderSheet(); }
 }
 async function loadPoss() {
-  const sel = S.sel, a = S.laws.actions[S.action]; S.error = null; S.showCollapsed = false;
-  if (!sel || !a) return;
+  const sel = S.sel, a = S.laws.actions[S.action]; S.error = null;
+  if (!sel || !a) { S.poss = null; return renderSheet(); }
   if (a.amounts && !a.amounts.includes(S.amount)) S.amount = a.amounts[1] ?? a.amounts[0];
-  if (!a.focusable) S.focus = 1;
-  if (a.needs === 'target' && !S.target) { S.poss = null; return renderSheet(); }
+  if (a.needs === 'target') { S.poss = null; return renderSheet(); }
   try {
-    const key = JSON.stringify([sel, S.action, S.focus, S.amount, S.target]);
-    const q = new URLSearchParams({ type: S.action, focus: S.focus });
+    const key = JSON.stringify([sel, S.action, S.amount]);
+    const q = new URLSearchParams({ type: S.action });
     if (a.amounts) q.set('amount', S.amount);
-    if (S.target) q.set('target', S.target);
     if (sel.kind === 'cell') { q.set('gx', sel.gx); q.set('gy', sel.gy); }
     if (sel.kind === 'point') { q.set('x', sel.x); q.set('y', sel.y); }
     const p = await api((sel.kind === 'object' ? `/objects/${sel.id}` : '/universe') + '/possibilities?' + q);
-    if (key !== JSON.stringify([S.sel, S.action, S.focus, S.amount, S.target])) return;
+    if (key !== JSON.stringify([S.sel, S.action, S.amount])) return;
     S.poss = p.decayed ? null : p;
     if (p.decayed) S.error = 'It has decayed since you last looked.';
   } catch (err) { S.poss = null; S.error = err.message; }
   renderSheet();
 }
 
-async function act() {
-  const sel = S.sel, a = S.laws.actions[S.action];
-  if (S.busy || !sel || !S.poss) return;
-  S.busy = true; S.error = null;
-  if (S.showCollapsed) { S.showCollapsed = false; renderSheet(); }
-  const btn = $('#act'); if (btn) btn.disabled = true;
-  try {
-    const body = { type: S.action, focus: S.focus, amount: a.amounts ? S.amount : undefined, target: S.target ?? undefined };
-    const r = sel.kind === 'object' ? await api(`/objects/${sel.id}/interact`, { body }) : sel.kind === 'cell' ? await api('/universe/explore', { body: { gx: sel.gx, gy: sel.gy } }) : await api('/universe/create', { body: { x: sel.x, y: sel.y } });
-    S.me = r.user; hud();
-    if (r.decayed) { S.result = { narrative: r.narrative, decayed: true }; S.poss = null; await loadUniverse(); await refreshDetail().catch(() => {}); }
-    else {
-      S.lastInteraction = Math.max(S.lastInteraction, r.interactionId);
-      const o = r.object || r.created[0], at = o ? o : sel.kind === 'point' ? sel : { x: (sel.gx + 0.5) * R(), y: (sel.gy + 0.5) * R() };
-      ripple(at.x, at.y);
-      await collapse(r);
-      S.result = r; S.showCollapsed = true;
-      S.uni.tick = r.universeTick;
-      await loadUniverse();
-      if (sel.kind === 'object') await refreshDetail().catch(() => {});
-      renderSheet();
-      $('.result')?.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
-      for (const d of r.newDiscoveries) toast(`<b>Discovery</b><span class="law">${esc(d.text)}</span>`, 'law');
-      for (const e of r.events) toast(esc(e.description));
-      if (r.rankUp) toast(`<b>You have changed</b><span class="law">You are now: ${esc(r.rankUp)}</span>`, 'law');
-      if (r.events.length) S.lastMajor = Math.max(S.lastMajor, ...r.events.map((e) => e.id));
-      // the world is different now, so the odds are too
-      if (sel.kind === 'object' && S.detail && !S.detail.merged && S.detail.actions.includes(S.action)) setTimeout(() => { if (S.sel === sel && S.result === r && !S.busy) loadPoss(); }, 2600);
-      else S.poss = null;
-    }
-  } catch (err) { S.error = err.message; }
-  S.busy = false; renderSheet();
-}
-
-// The collapse: a needle sweeps the spectrum and comes to rest where the roll fell.
-async function collapse(r) {
-  const bar = $('.spectrum'), needle = $('.needle'); if (!bar || !needle) return;
-  const ps = r.distribution.outcomes.map((o) => o.p);
-  const x = (ps.slice(0, r.chosen).reduce((s, p) => s + p, 0) + ps[r.chosen] * Math.min(0.98, Math.max(0.02, r.at))) * 100;
-  needle.style.opacity = 1;
-  if (!calm) {
-    const stops = [0, 100, 6, 88, x > 50 ? 22 : 74, x];
-    await needle.animate(stops.map((v, i) => ({ left: v + '%', easing: 'cubic-bezier(.45,.05,.55,.95)', offset: [0, 0.2, 0.42, 0.62, 0.8, 1][i] })), { duration: 1700, fill: 'forwards' }).finished;
-  }
-  needle.style.left = x + '%';
-  bar.classList.add('collapsed'); bar.children[r.chosen]?.classList.add('chosen');
-  $('.legend')?.classList.add('collapsed'); $('.legend')?.children[r.chosen]?.classList.add('chosen');
-  await wait(calm ? 200 : 650);
-}
-
 const pct = (p, exact) => (exact ? (p * 100 >= 10 ? Math.round(p * 100) : (p * 100).toFixed(1)) + '%' : '~' + Math.round(p * 100) + '%');
-function spectrumHTML(d, chosen = -1, at = 0) {
-  const done = chosen >= 0;
-  const x = done ? (d.outcomes.slice(0, chosen).reduce((s, o) => s + o.p, 0) + d.outcomes[chosen].p * Math.min(0.98, Math.max(0.02, at))) * 100 : 0;
-  return { bar: `<div class="spectrum${done ? ' collapsed' : ''}">${d.outcomes.map((o, i) => `<div class="segm${o.label ? '' : ' unseen'}${i === chosen ? ' chosen' : ''}" style="flex-grow:${Math.max(0.02, o.p)};flex-basis:0;background-color:${HUES[i % HUES.length]};--c:${HUES[i % HUES.length]}">${o.p >= 0.13 ? `<span>${pct(o.p, d.exact)}</span>` : ''}</div>`).join('')}<div class="needle" style="${done ? `opacity:1;left:${x}%` : ''}"></div></div>`,
-    legend: `<ul class="legend${done ? ' collapsed' : ''}">${d.outcomes.map((o, i) => `<li class="${i === chosen ? 'chosen' : ''}"><i style="background:${HUES[i % HUES.length]}"></i>${o.label ? `<span>${esc(o.label)}</span>` : '<span class="unseen-t">An outcome you have not witnessed</span>'}<b>${pct(o.p, d.exact)}</b></li>`).join('')}</ul>` };
+function spectrumHTML(d) {
+  return { bar: `<div class="spectrum">${d.outcomes.map((o, i) => `<div class="segm${o.label ? '' : ' unseen'}" style="flex-grow:${Math.max(0.02, o.p)};flex-basis:0;background-color:${HUES[i % HUES.length]};--c:${HUES[i % HUES.length]}">${o.p >= 0.13 ? `<span>${pct(o.p, d.exact)}</span>` : ''}</div>`).join('')}</div>`,
+    legend: `<ul class="legend">${d.outcomes.map((o, i) => `<li><i style="background:${HUES[i % HUES.length]}"></i>${o.label ? `<span>${esc(o.label)}</span>` : '<span class="unseen-t">An outcome you have not witnessed</span>'}<b>${pct(o.p, d.exact)}</b></li>`).join('')}</ul>` };
 }
 
 function renderSheet() {
   const el = $('#sheet'), sel = S.sel;
-  if (!S.laws || !S.me) return;
-  if (!sel) {
-    const fresh = S.me.knowledge === 0;
-    el.innerHTML = `<p class="hint">${fresh ? 'Something is here that you have never observed. Tap one of the dotted circles.' : 'Tap anything to see what could happen. Tap empty space to create. Tap a dashed region to give it a state.'}</p>`;
-    return;
-  }
-  const a = S.laws.actions[S.action], r = S.result, d = S.detail, o = d?.object;
+  if (!S.laws || !S.me || !sel) return;
+  const known = new Set(S.me.gestures.map((g) => g.key));
+  const a = S.laws.actions[S.action], d = S.detail, o = d?.object;
+  const r = S.last && !S.last.decayed && sel.kind === 'object' && S.last.objectId === sel.id ? S.last : null;
   let head = '', body = '';
+  const close = '<button class="x" data-do="close" aria-label="Close">×</button>';
   if (sel.kind === 'object') {
-    if (!o) { el.innerHTML = `<p class="hint">${esc(S.error || 'Looking…')}</p>`; return; }
-    const before = r?.before, delta = (k) => (r && !r.decayed && before?.[k] != null && r.object?.[k] != null && r.object[k] !== before[k] ? `<span class="delta ${r.object[k] > before[k] ? 'up' : 'down'}">${r.object[k] > before[k] ? '+' : ''}${Math.round((r.object[k] - before[k]) * 10) / 10}</span>` : '');
+    if (!o) { el.innerHTML = `<div class="sheet-head"><p class="hint">${esc(S.error || 'Looking…')}</p>${close}</div>`; return; }
+    const before = r?.before, delta = (k) => (before?.[k] != null && r.object?.[k] != null && r.object[k] !== before[k] ? `<span class="delta ${r.object[k] > before[k] ? 'up' : 'down'}">${r.object[k] > before[k] ? '+' : ''}${Math.round((r.object[k] - before[k]) * 10) / 10}</span>` : '');
     const stat = (label, k, extra = '') => `<div><dt>${label}</dt><dd class="${o[k] == null ? 'unk' : ''}">${o[k] == null ? '???' : fmt(o[k])}${k === 'stability' && o[k] != null ? '%' : ''}${delta(k)}</dd>${extra}</div>`;
     const facts = [
       o.known ? `${o.state ? esc(o.state[0].toUpperCase() + o.state.slice(1)) + ', in ' : 'In '}Region ${d.regionNum ?? o.regionNum}${o.mine ? '. You made this.' : ''}` : 'You have never observed this. Its nature is unknown to you.',
@@ -392,30 +524,25 @@ function renderSheet() {
       d.bonds.length ? `Bonded to ${d.bonds.map((b) => esc(b.label)).join(', ')}.` : '',
       d.otherObservers ? `${d.otherObservers} other observer${d.otherObservers === 1 ? ' has' : 's have'} interacted with this.` : '',
     ].filter(Boolean);
-    head = `<div class="sheet-head"><div><h2>${esc(o.label)}</h2><p class="sub">${o.known ? esc(o.typeLabel) : 'Unobserved'}${o.complexity != null ? `, complexity ${fmt(o.complexity)}` : ''}</p></div><button class="x" data-do="close" aria-label="Close">×</button></div>
+    const chips = d.actions.filter((k) => known.has(k));
+    head = `<div class="sheet-head"><div><h2>${esc(o.label)}</h2><p class="sub">${o.known ? esc(o.typeLabel) : 'Unobserved'}${o.complexity != null ? `, complexity ${fmt(o.complexity)}` : ''}</p></div>${close}</div>
       <dl class="stats">${stat('Energy', 'energy', o.type === 'core' && o.energy != null ? `<div class="meter"><i style="width:${Math.min(100, (o.energy / o.threshold) * 100)}%"></i></div>` : '')}${stat('Stability', 'stability')}${stat('Information', 'information')}</dl>
       <div class="facts">${facts.map((f) => `<span>${f}</span>`).join('')}</div>
-      <div class="chips">${d.actions.map((k) => { const x = S.laws.actions[k]; return `<button class="chip" data-do="action" data-a="${k}" aria-pressed="${k === S.action}">${esc(x.label)}<small>${x.amounts ? '' : x.cost}</small></button>`; }).join('')}</div>`;
+      ${chips.length ? `<p class="poss-title" style="margin-top:12px"><span>Odds for the gestures you have found</span></p><div class="chips">${chips.map((k) => `<button class="chip" data-do="action" data-a="${k}" aria-pressed="${k === S.action}">${esc(S.laws.actions[k].label)}</button>`).join('')}</div>` : ''}`;
   } else if (sel.kind === 'cell') {
-    head = `<div class="sheet-head"><div><h2>${r?.region ? 'Region ' + r.region.num : 'An unexplored region'}</h2><p class="sub">${r?.region ? 'It has a state now, and a place in your map.' : 'Nobody you know of has been here. It has no state you can know until someone arrives.'}</p></div><button class="x" data-do="close" aria-label="Close">×</button></div>`;
+    head = `<div class="sheet-head"><div><h2>An unexplored region</h2><p class="sub">It has no state you can know until someone arrives.</p></div>${close}</div>`;
   } else {
-    head = `<div class="sheet-head"><div><h2>Empty space</h2><p class="sub">Spend energy here and something may begin to exist.</p></div><button class="x" data-do="close" aria-label="Close">×</button></div>`;
+    head = `<div class="sheet-head"><div><h2>Empty space</h2><p class="sub">Nothing is here. That is not the same as nothing being possible here.</p></div>${close}</div>`;
   }
-
-  let actBtn = '';
   if (a) {
-    if (a.needs === 'target' && !S.target) body += `<p class="hint" style="margin-top:12px">Now tap a second object on the map to connect it to.</p>`;
-    const justCollapsed = !!(r && !r.decayed && r.action === S.action && (S.showCollapsed || !S.poss));
-    const shown = justCollapsed ? r.distribution : S.poss;
-    if (a.amounts && S.poss) body += `<div class="opts"><span>Amount</span>${a.amounts.map((n) => `<button class="opt" data-do="amount" data-n="${n}" aria-pressed="${n === S.amount}">${n}</button>`).join('')}</div>`;
-    if (a.focusable && S.poss) body += `<div class="opts"><span>Focus</span>${[1, 2, 3].map((n) => `<button class="opt" data-do="focus" data-n="${n}" aria-pressed="${n === S.focus}">×${n}</button>`).join('')}<span>costs more, bends the odds</span></div>`;
-    const blur = sel.kind === 'object' ? 'blurred until you observe it more' : 'blurred until you understand probability better';
-    const sp = shown ? spectrumHTML(shown, justCollapsed ? r.chosen : -1, justCollapsed ? r.at : 0) : null;
-    if (shown) body += `<div class="poss"><div class="poss-title"><span>${justCollapsed ? 'What happened' : 'What could happen'}</span><span>${shown.exact ? 'exact odds' : blur}</span></div>${sp.bar}</div>`;
-    if (r) body += resultHTML(r);
-    if (shown) body += sp.legend + (shown.modifiers.length ? `<ul class="why">${shown.modifiers.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '');
-    if (S.poss) actBtn = `<div class="actbar"><button class="primary act" id="act" data-do="act" ${S.busy || !S.poss.affordable ? 'disabled' : ''}><span>${esc(a.label)}${r && !r.decayed && r.action === S.action ? ' again' : ''}</span><em>${S.poss.affordable ? `${S.poss.cost} energy` : `needs ${S.poss.cost} energy`}</em></button></div>`;
-  } else if (r) body += resultHTML(r);
+    body += `<p class="how">${esc(HOW[S.action] || '')}</p>`;
+    if (a.amounts && S.poss) body += `<div class="opts"><span>If the amount were</span>${a.amounts.map((n) => `<button class="opt" data-do="amount" data-n="${n}" aria-pressed="${n === S.amount}">${n}</button>`).join('')}</div>`;
+    if (S.poss) {
+      const sp = spectrumHTML(S.poss), blur = sel.kind === 'object' ? 'blurred until you observe it more' : 'blurred until you understand probability better';
+      body += `<div class="poss"><div class="poss-title"><span>What could happen, costing ${S.poss.cost}</span><span>${S.poss.exact ? 'exact odds' : blur}</span></div>${sp.bar}</div>${sp.legend}${S.poss.modifiers.length ? `<ul class="why">${S.poss.modifiers.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}`;
+    }
+  } else if (sel.kind !== 'object') body += `<p class="how">You have not found a way to act here yet.</p>`;
+  if (r) body += resultHTML(r);
   if (S.error) body += `<p class="error" style="margin-top:10px">${esc(S.error)}</p>`;
   if (sel.kind === 'object' && o) {
     if (o.level >= 1 && o.type !== 'remnant') {
@@ -425,24 +552,21 @@ function renderSheet() {
     body += `<div class="links">${o.level >= 2 ? `<button class="quiet" data-do="history">Why does this exist?</button>` : ''}${d.canName ? `<button class="quiet" data-do="name">Name it</button>` : ''}${o.level >= 1 ? `<button class="quiet" data-do="note">Leave a note</button>` : ''}</div>`;
   }
   const top = el.scrollTop;
-  el.innerHTML = head + body + actBtn;
+  el.innerHTML = head + body;
   el.scrollTop = top;
 }
 function resultHTML(r) {
-  const hue = r.decayed ? '#6a6d99' : HUES[r.chosen % HUES.length];
-  return `<div class="result" style="--c:${hue}"><p class="voice">${esc(r.narrative)}</p>${r.more ? `<p class="more">${esc(r.more)}</p>` : ''}
-    ${r.firstTime ? `<p class="new">You had never witnessed this outcome. Knowledge +1.</p>` : ''}
-    ${r.decayed ? '' : `<div class="proof"><span>Tick ${fmt(r.universeTick)}</span><span>roll ${r.roll.toFixed(4)}</span><span>seed ${esc(r.seed.slice(0, 10))}…</span><button class="quiet" data-do="verify" data-id="${r.interactionId}">Re-derive it</button><span id="proof"></span></div>`}</div>`;
+  const hue = HUES[r.chosen % HUES.length];
+  return `<div class="result" style="--c:${hue}"><p class="poss-title"><span>The last thing you did to it</span></p><p class="voice">${esc(r.narrative)}</p>${r.more ? `<p class="more">${esc(r.more)}</p>` : ''}
+    <div class="proof"><span>Tick ${fmt(r.universeTick)}</span><span>roll ${r.roll.toFixed(4)}</span><span>seed ${esc(r.seed.slice(0, 10))}…</span><button class="quiet" data-do="verify" data-id="${r.interactionId}">Re-derive it</button><span id="proof"></span></div></div>`;
 }
 
 $('#sheet').addEventListener('click', async (e) => {
-  const b = e.target.closest('[data-do]'); if (!b || S.busy) return;
+  const b = e.target.closest('[data-do]'); if (!b) return;
   const what = b.dataset.do;
-  if (what === 'close') return select(null);
-  if (what === 'action') { S.action = b.dataset.a; S.target = null; S.result = null; S.poss = null; S.focus = 1; drawMap(); renderSheet(); return loadPoss(); }
-  if (what === 'amount') { S.amount = Number(b.dataset.n); S.result = null; return loadPoss(); }
-  if (what === 'focus') { S.focus = Number(b.dataset.n); S.result = null; return loadPoss(); }
-  if (what === 'act') return act();
+  if (what === 'close') return closeStudy();
+  if (what === 'action') { S.action = b.dataset.a; S.poss = null; renderSheet(); return loadPoss(); }
+  if (what === 'amount') { S.amount = Number(b.dataset.n); return loadPoss(); }
   if (what === 'verify') {
     try { const v = await api(`/interactions/${b.dataset.id}/verify`); $('#proof').textContent = v.ok ? 'Same state, same act, same outcome. It could not have gone otherwise.' : 'The record does not match.'; } catch (err) { $('#proof').textContent = err.message; }
     return;
@@ -502,7 +626,16 @@ async function showTab(tab) {
 async function discover(el) {
   const [mine, all] = await Promise.all([api('/users/me/discoveries'), api('/discoveries')]);
   const laws = mine.discoveries.filter((d) => d.type === 'law'), firsts = mine.discoveries.filter((d) => d.type === 'first');
-  el.innerHTML = `<h2>What you have learned</h2><p class="lede">Knowledge is not points. It is the set of relationships you have found by experiment. None of it is guaranteed to be true.</p>
+  const EFFECT = { observe: 'Practice: deeper readings, and exact odds sooner.', touch: 'Practice: it settles more often.', energize: 'Practice: less agitation, and longer holds give larger amounts.',
+    draw: 'Practice: fewer leaks and collapses, and you can hold more energy.', connect: 'Practice: longer reach, and bonds form more often.', separate: 'Practice: bonds break more cleanly.',
+    stabilize: 'Practice: stronger effect at lower cost.', unmake: 'Practice: it succeeds more often.', create: 'Practice: cheaper, and fades less often.', explore: 'Practice: you find more, and less emptiness.',
+    signal: 'Practice: more often answered.', sign: 'Practice: marks you as a Sign-Bearer.' };
+  const gs = S.me.gestures, hidden = S.laws.gestureCount - gs.length;
+  const codex = `<h2>Gestures</h2><p class="lede">Nothing here was taught to you. You found each of these with your own hands, and each grows only by being used.</p>
+    ${gs.length ? gs.map((g) => `<div class="gest"><b>${esc(g.name)}</b><span class="lv">Level ${g.level}</span><span class="howto">${esc(HOW[g.key] || '')}</span>
+      <span class="bar"><i style="width:${g.next ? Math.min(100, ((g.uses - g.prev) / (g.next - g.prev)) * 100) : 100}%"></i></span><span class="effect">${fmt(g.uses)} use${g.uses === 1 ? '' : 's'}${g.next ? `, ${fmt(g.next - g.uses)} more to level ${g.level + 1}` : ''}. ${EFFECT[g.key] || ''}</span></div>`).join('') : '<p class="empty">You have not done anything yet. Tap something.</p>'}
+    <p class="fine" style="margin-top:12px">${hidden > 0 ? `${hidden} more gesture${hidden === 1 ? ' exists' : 's exist'}. Try things.` : 'You have found every gesture there is.'}</p>`;
+  el.innerHTML = codex + `<h2 style="margin-top:34px">What you have learned</h2><p class="lede">Knowledge is not points. It is the set of relationships you have found by experiment. None of it is guaranteed to be true.</p>
     <div>${mine.domains.map((d) => `<div class="domain"><span>${esc(d.key[0].toUpperCase() + d.key.slice(1))}</span><div class="bar"><i style="width:${Math.min(100, ((d.points - 3 * d.level ** 2) / (3 * (d.level + 1) ** 2 - 3 * d.level ** 2)) * 100)}%"></i></div><b>Level ${d.level}</b></div>`).join('')}</div>
     <h3>Your hypotheses, ${mine.lawsFound} of ${mine.lawsTotal}</h3>
     ${laws.length ? `<ul class="rows">${laws.map((d) => `<li><q>${esc(d.description)}</q><span class="t">found at tick ${fmt(d.tick)}</span></li>`).join('')}</ul>` : '<p class="empty">You have not found a rule yet. Do the same thing to different objects and watch what differs.</p>'}
@@ -528,6 +661,7 @@ function pickSignal(objectId) {
     try {
       const r = await api(`/objects/${objectId}/signal`, { body: { pattern: picked.join('') } });
       $('#modal').hidden = true; S.me.energy = r.energy; hud(); toast(esc(r.narrative));
+      if (r.firstGesture) toast(`<b>${esc(r.firstGesture.name)}</b><span class="law">${esc(r.firstGesture.text)}</span><span class="t">Knowledge +1</span>`, 'law');
       for (const d of r.newDiscoveries) toast(`<b>Discovery</b><span class="law">${esc(d.text)}</span>`, 'law');
       await loadUniverse(); await refreshDetail().catch(() => {});
     } catch (err) { $('#sigErr').textContent = err.message; }
@@ -595,10 +729,10 @@ async function history(el) {
   el.querySelectorAll('[data-h]').forEach((b) => (b.onclick = () => { historyMode = b.dataset.h; history(el); }));
 }
 async function profile(el) {
-  const p = await api('/users/me'), l = p.life, ranks = ['Unknown Observer', 'Explorer', 'Interactor', 'Creator', 'Architect', 'Cosmic Observer'];
+  const p = await api('/users/me'), l = p.life, top = S.me.gestures.slice().sort((a, b) => b.level - a.level || b.uses - a.uses)[0];
   const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
   el.innerHTML = `<h2>${esc(p.user.username)}</h2><p class="lede">Your life. There is only this one.</p>
-    <p class="ladder">${ranks.map((r) => (r === p.user.rank ? `<b>${r}</b>` : `<span>${r}</span>`)).join('<span>›</span>')}</p>
+    <p class="voice">${esc(p.user.rank)}</p><p class="fine">${top ? `You are known by what you do most: ${esc(top.name.toLowerCase())}, level ${top.level}.` : 'You will be known by what you do most.'} You can hold up to ${fmt(p.user.capacity)} energy.</p>
     <dl class="life" style="margin-top:14px">
       ${row('Universe age when you arrived', fmt(l.arrivedTick))}${row('Universe age now', fmt(l.currentTick))}
       ${row('Interactions', fmt(l.interactions))}${row('Discoveries', fmt(l.discoveries))}${row('Regions given a place in your map', fmt(l.regionsExplored))}
