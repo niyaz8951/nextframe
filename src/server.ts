@@ -41,7 +41,7 @@ app.use(express.static(path.resolve(here, '..', 'public'), {
 
 // Background drift: the universe keeps moving when no one is acting.
 if (config.heartbeatSeconds > 0 && config.heartbeatTicks > 0) {
-  setInterval(() => heartbeat(db, config.heartbeatTicks).catch((e) => console.error('[heartbeat]', e.message)), config.heartbeatSeconds * 1000).unref();
+  setInterval(() => heartbeat(db).catch((e) => console.error('[heartbeat]', e.message)), config.heartbeatSeconds * 1000).unref();
 }
 
 const server = app.listen(config.port, () => console.log(`THE NEXT FRAME is running on http://localhost:${config.port} (${db.kind})`));

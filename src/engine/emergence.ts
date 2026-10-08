@@ -1,6 +1,6 @@
 // LAW_EMERGENCE / LAW_REPLICATION / LAW_DECAY in motion: thresholds, new forms,
 // life, and the slow background evolution that happens once per epoch.
-import { LAW_EMERGENCE as EM, LAW_ENTROPY, LAW_REPLICATION as REP, LAW_TIME, REGION_SIZE, TYPES } from './laws.js';
+import { LAW_EMERGENCE as EM, LAW_ENTROPY, LAW_GRAVITY, LAW_REPLICATION as REP, LAW_TIME, REGION_SIZE, TYPES } from './laws.js';
 import { roll, sha } from './rng.js';
 import type { Obj } from './simulate.js';
 import { Frame, baseComplexity, clamp, complexityOf, labelOf, regionOf, round, type Holder } from './world.js';
@@ -35,7 +35,7 @@ export const canSplit = (o: { type: string; energy: number }) =>
 const ICON: Record<string, string> = { star: '⭐', planet: '🪐', core: '🌑', replicator: '🧬', organism: '🧬', ecosystem: '🌿', intelligence: '🏛️', singularity: '⚫' };
 const BIG = new Set(['core', 'star', 'planet', 'replicator', 'organism', 'ecosystem', 'intelligence', 'singularity']);
 
-export async function changeForm(frame: Frame, o: O, to: string, userId: number | null, note = '') {
+export async function changeForm(frame: Frame, o: O, to: string, userId: number | null, note = '', quiet = false) {
   const from = o.type;
   const before = labelOf(o);
   o.props = { ...o.props, complexity: Math.max(complexityOf(o), baseComplexity(to)), forms: [...(o.props.forms || []), { from, to, tick: frame.tick }] };
@@ -49,7 +49,7 @@ export async function changeForm(frame: Frame, o: O, to: string, userId: number 
   if (!seen && BIG.has(to)) {
     await frame.event('FIRST', `${ICON[to] || '✦'} The first ${label} in this universe has emerged.`, { objectId: o.id, regionId: o.region_id, userId, impact: 'cosmic', data: { kind: to } });
   }
-  await frame.event('TRANSFORMATION', `${before} became a ${label}.${note ? ' ' + note : ''}`, { objectId: o.id, regionId: o.region_id, userId, impact: BIG.has(to) ? 'major' : 'minor', data: { from, to } });
+  if (!quiet) await frame.event('TRANSFORMATION', `${before} became a ${label}.${note ? ' ' + note : ''}`, { objectId: o.id, regionId: o.region_id, userId, impact: BIG.has(to) ? 'major' : 'minor', data: { from, to } });
   return { from, to, first: !seen && BIG.has(to) };
 }
 
@@ -94,13 +94,21 @@ export async function checkThresholds(frame: Frame, o: O, userId: number | null)
     const rows = await frame.q(`SELECT user_id, MIN(universe_tick) AS first FROM interactions WHERE object_id = $1 AND interaction_type = 'energize' GROUP BY user_id`, [o.id]);
     const ids = new Set(rows.map((r) => Number(r.user_id)));
     if (userId) ids.add(userId);
-    const observers = Math.max(1, ids.size);
+    const observers = ids.size;
     const h = { first: rows.length ? Math.min(...rows.map((r) => Number(r.first))) : null };
     const span = frame.tick - Number(h.first ?? o.created_tick);
-    const note = `This star emerged after ${observers} observer${observers === 1 ? '' : 's'} contributed energy across ${span.toLocaleString('en-US')} universe ticks.`;
-    o.props = { ...o.props, origin: note };
-    await changeForm(frame, o, 'star', userId, '');
-    await frame.event('STAR_IGNITION', `⭐ A new star was born. ${note}`, { objectId: o.id, regionId: o.region_id, userId, impact: 'cosmic', data: { observers, span } });
+    const note = observers === 0 ? 'It gathered itself out of dust. No observer fed it.'
+      : `This star emerged after ${observers} observer${observers === 1 ? '' : 's'} contributed energy across ${span.toLocaleString('en-US')} universe ticks.`;
+    // How long it will live is settled at birth: a giant burns out in days, a dwarf lasts months.
+    const sb = sha(`star:${o.id}`);
+    const giant = roll(sb, 'giant') < LAW_GRAVITY.giantChance;
+    const [lo, hi] = giant ? LAW_GRAVITY.giantLifeDays : LAW_GRAVITY.dwarfLifeDays;
+    const lifeDays = lo + roll(sb, 'life') * (hi - lo);
+    const burn = round(o.energy / (lifeDays * (LAW_GRAVITY.ticksPerDay / 100)), 4);
+    o.props = { ...o.props, origin: note, rt: frame.tick, gen: o.props.gen ?? o.props.enriched ?? 0, burn, giant };
+    await changeForm(frame, o, 'star', userId, '', true);
+    const [reg] = await frame.q('SELECT num FROM regions WHERE id = $1', [o.region_id]);
+    await frame.event('STAR_IGNITION', `⭐ A new star was born in Region ${reg?.num}. ${note}`, { objectId: o.id, regionId: o.region_id, userId, impact: observers ? 'cosmic' : 'major', data: { observers, span } });
     return `The core ignited. ${note}`;
   }
   if (o.type === 'star' && o.energy >= EM.singularity) {
@@ -108,14 +116,32 @@ export async function checkThresholds(frame: Frame, o: O, userId: number | null)
     return 'Too much. The star folded inward into a singularity.';
   }
   if (o.type === 'star' && o.energy <= EM.starDeath) {
-    await frame.collapse(o, 'Its last energy was drawn away.', userId);
-    return 'The star went dark.';
+    await supernova(frame, o, userId);
+    return 'The star died. What it made in its lifetime is now scattered around it.';
   }
   return null;
 }
 
 // ---- the epoch: slow background evolution, run when the clock crosses a boundary ----
-export async function maybeEpoch(frame: Frame) {
+// A star's death is not an ending. It scatters dust richer than the dust it was made from.
+export async function supernova(frame: Frame, o: O, userId: number | null) {
+  const gen = (o.props?.gen || 0) + 1;
+  const s = sha(`supernova:${o.id}:${frame.tick}`);
+  const [lo, hi] = LAW_GRAVITY.supernovaDust;
+  const n = lo + Math.floor(roll(s, 'n') * (hi - lo + 1));
+  const label = labelOf(o);
+  for (let i = 0; i < n; i++) {
+    const a = roll(s, 'a' + i) * Math.PI * 2, d = 35 + roll(s, 'd' + i) * 45;
+    const p = inRegion(o.region_id, o.x + Math.cos(a) * d, o.y + Math.sin(a) * d);
+    const dust = await frame.spawn({ type: 'dust', x: p.x, y: p.y, from: frame.vac, energy: 30 + Math.floor(roll(s, 'e' + i) * 40), stability: 55, parent: o.id, why: 'supernova',
+      props: { enriched: gen, complexity: 5 + 8 * gen } });
+    frame.move(o, dust, Math.floor(o.energy / (n - i)), 'supernova');
+  }
+  await frame.event('SUPERNOVA', `💥 ${label} died. It scattered ${n} clouds of enriched dust (generation ${gen}).`, { objectId: o.id, regionId: o.region_id, userId, impact: 'major', data: { gen } });
+  await frame.collapse(o, 'It burned through everything it had.', userId);
+}
+
+export async function maybeEpoch(frame: Frame, extra?: (frame: Frame, epoch: number, n: number) => Promise<void>) {
   const E = LAW_TIME.epochTicks;
   const n = Math.min(10, Math.floor(frame.tick / E) - Math.floor(frame.u.last_epoch / E));
   if (n <= 0) return;
@@ -148,6 +174,10 @@ export async function maybeEpoch(frame: Frame) {
     await frame.settle(star);
     if (star.energy > 200) frame.move(star, p, REP.starFeed * n, 'starlight');
     p.stability = clamp(p.stability + 2, 0, 100);
+    // Enriched dust held and warmed by a star can settle into a world.
+    if ((p.type === 'dust' || p.type === 'cluster') && p.props?.enriched && nextForm(p, true) === 'planet' && roll(sha(`epoch:${epoch}:planet:${p.id}`)) < LAW_GRAVITY.planetChance) {
+      await changeForm(frame, p, 'planet', null, 'It settled out of enriched dust around its star.');
+    }
     if (p.type === 'planet') {
       p.props = { ...p.props, complexity: complexityOf(p) + n };
       // LAW_EMERGENCE: on a warm, complex, steady world, something may begin to copy itself.
@@ -192,6 +222,7 @@ export async function maybeEpoch(frame: Frame) {
       if (to === 'intelligence') await frame.event('CIVILIZATION', `🏛️ Civilization detected. ${labelOf(o)} has begun to communicate.`, { objectId: o.id, regionId: o.region_id, impact: 'cosmic' });
     }
   }
+  if (extra) await extra(frame, epoch, n);
   await frame.flush();
 }
 

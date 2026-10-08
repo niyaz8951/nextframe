@@ -1,7 +1,8 @@
 // A Frame is one step of the universe: it locks the present, lets the engine
 // change it, and writes the next state. Everything inside one Frame is atomic.
 import type { Q } from '../db.js';
-import { LAW_ENERGY_CONSERVATION as EC, LAW_ENTROPY, REGION_SIZE, TYPES } from './laws.js';
+import { config } from '../config.js';
+import { ERAS, LAW_ENERGY_CONSERVATION as EC, LAW_ENTROPY, REGION_SIZE, TYPES } from './laws.js';
 import { project, type Obj } from './simulate.js';
 
 export class GameError extends Error {
@@ -40,6 +41,14 @@ export class Frame {
     const [u] = await q(`SELECT * FROM universe WHERE id = 1 ${lock ? 'FOR UPDATE' : ''}`);
     if (!u) throw new GameError(503, 'The universe has not begun yet.');
     f.u = u; f.t0 = f.tick = u.current_tick; f.vac.energy = u.free_energy;
+    // The clock is tied to real time: whatever time has passed since the last frame (even while
+    // the server slept) is added now, so the universe ages whether or not anyone is here.
+    const rate = config.heartbeatSeconds > 0 ? config.heartbeatTicks / config.heartbeatSeconds : 0;
+    if (lock && rate > 0) {
+      const at = new Date(u.clock_at).getTime();
+      const due = Math.floor(((Date.now() - at) / 1000) * rate);
+      if (due > 0) { f.t0 = f.tick = u.current_tick + due; u.clock_at = new Date(at + (due / rate) * 1000); }
+    }
     return f;
   }
 
@@ -125,6 +134,14 @@ export class Frame {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id, universe_tick, event_type, description, affected_object_id, region_id, impact`,
       [this.tick, type, description, e.objectId ?? null, e.regionId ?? null, e.userId ?? null, e.impact ?? 'minor', JSON.stringify(e.data ?? {})]);
     this.events.push(row);
+    // Eras: the universe is in the latest age whose defining thing has happened at least once.
+    const kind = e.data?.kind;
+    const era = type === 'CIVILIZATION' || kind === 'intelligence' ? 5 : type === 'LIFE' || kind === 'replicator' ? 4 : kind === 'planet' ? 3
+      : type === 'SUPERNOVA' ? 2 : type === 'STAR_IGNITION' || kind === 'star' ? 1 : 0;
+    if (era > (this.u.era || 0)) {
+      this.u.era = era;
+      await this.event('ERA', `A new age has begun: ${ERAS[era]}.`, { impact: 'cosmic', data: { era } });
+    }
     return row;
   }
 
@@ -145,8 +162,8 @@ export class Frame {
     this.u.total_information += this.info;
     this.u.free_energy = this.vac.energy;
     this.u.current_tick = this.u.age = this.tick;
-    await this.q('UPDATE universe SET current_tick=$1, age=$1, entropy=$2, free_energy=$3, total_information=$4, last_epoch=$5 WHERE id=1',
-      [this.tick, this.u.entropy, this.u.free_energy, this.u.total_information, this.u.last_epoch]);
+    await this.q('UPDATE universe SET current_tick=$1, age=$1, entropy=$2, free_energy=$3, total_information=$4, last_epoch=$5, clock_at=$6, natural_stars=$7, era=$8 WHERE id=1',
+      [this.tick, this.u.entropy, this.u.free_energy, this.u.total_information, this.u.last_epoch, this.u.clock_at, this.u.natural_stars, this.u.era]);
     this.dirty.clear(); this.dirtyRegions.clear(); this.objs.clear(); this.regions.clear();
     this.dissipated = 0; this.info = 0;
   }

@@ -91,7 +91,7 @@ Observers recharge slowly from the vacuum up to 100; to hold more they must draw
 from the universe. `npm test` checks the ledger after every batch of interactions.
 
 **Time.** The universe tick advances with every interaction (heavier acts advance it
-further) and by a slow background heartbeat. Every 250 ticks an epoch runs: regions
+further) and by 5 ticks per real minute. Every 250 ticks an epoch runs: regions
 relax, long-unattended fragile objects decay, stars feed what is bonded to them, and
 living systems feed, replicate and occasionally become something more.
 
@@ -101,6 +101,31 @@ three observers acting in one region cause a convergence; clusters and dust bond
 a star can become planets; a complex, steady, star-fed planet has a small chance per
 epoch of producing a self-replicating system, which can become an organism, an
 ecosystem and eventually a civilisation.
+
+**The universe runs by itself.** It began with a big bang: 25 regions holding only
+dust, particles and energy fields. From there, with nobody playing (`src/engine/cosmos.ts`):
+
+- *Gravity.* Each epoch, light things fall toward the heaviest thing nearby, close
+  pairs merge, clusters thicken into dust, dust sweeps up particles and collapses
+  into dormant cores, and cores gather energy almost to ignition.
+- *Stars.* Stars ignite unaided on a slowing schedule measured in real time since
+  the big bang: one a minute for the first 30 minutes, then one an hour until 24
+  hours, one a day until 7 days, one a week until 30 days, one a month until a year,
+  then one a year. Observers can ignite more by feeding cores.
+- *Stellar lives.* Each star's lifetime is fixed at birth. About one in five is a
+  giant that burns out in 4 to 8 days; the rest last 2 to 13 months. A dying star
+  scatters enriched dust, which nearby stars capture and which settles into planets.
+- *Life.* Star-fed planets grow more complex and may produce self-replicating
+  systems, then organisms, ecosystems and civilisations.
+- *Eras.* The Dust Age, The First Light, The Age of Ashes, The Age of Worlds, The
+  Living Age, The Thinking Age. Each begins the first time its defining event happens.
+- *Real-time clock.* Ticks are tied to real time, so time that passed while the
+  server was asleep is added when it wakes.
+
+`npx tsx scripts/simulate-alone.ts 60` fast-forwards an empty throwaway universe and
+prints when each thing first happens. In one such run with no players: first star
+within a minute, first star death on day 5, first planet on day 6, first life on
+day 18, first civilisation on day 23. Players change all of this.
 
 **Unexplored regions have no rows in the database.** A region is given a state by
 the first observer to explore it, using that interaction's seed. Later observers find

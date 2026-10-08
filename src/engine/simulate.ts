@@ -17,10 +17,11 @@ export function project(o: Obj, tick: number, regionEntropy: number) {
   const stability = Math.max(0, o.stability - (decay * dt) / 100);
   let radiated = 0;
   let radTick = o.props.rt ?? o.created_tick;
-  if (t.radiate > 0) {
-    const due = Math.floor((t.radiate * Math.max(0, tick - radTick)) / 100);
+  const rate = Number(o.props?.burn) > 0 ? Number(o.props.burn) : t.radiate;   // stars carry their own burn rate
+  if (rate > 0) {
+    const due = Math.floor((rate * Math.max(0, tick - radTick)) / 100);
     radiated = Math.min(Math.max(0, o.energy - t.floor), due);
-    radTick = due > 0 ? radTick + Math.floor((due * 100) / t.radiate) : radTick;
+    radTick = due > 0 ? radTick + Math.floor((due * 100) / rate) : radTick;
   }
   return { stability, energy: o.energy - radiated, radiated, radTick, collapsed: t.decay > 0 && stability <= 0 };
 }

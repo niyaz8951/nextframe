@@ -75,6 +75,41 @@ export const LAW_EMERGENCE = {
   lifeComplexity: 30, lifeChance: 0.02, lifePerObserver: 0.005,
 };
 
+// LAW_GRAVITY: what matter does when nobody is watching.
+export const LAW_GRAVITY = {
+  // Unattended star formation slows as the universe ages. Each row: [until this real age in seconds, one star every N seconds].
+  starSchedule: [[1800, 60], [86400, 3600], [604800, 86400], [2592000, 604800], [31536000, 2592000], [Infinity, 31536000]] as [number, number][],
+  maxStarsPerFrame: 12,        // catching up after a long sleep is spread over several frames
+  naturalStarsPerRegion: 3,
+  starEnergy: [1100, 2400],    // a new star's energy; it radiates this away over days and then dies
+  regionsPerEpoch: 12,
+  drift: 0.05,                 // fraction of the distance light things fall toward the heaviest thing nearby, per epoch
+  mergeWithin: 45, mergeChance: 0.6,
+  clusterToDustComplexity: 4,
+  dustAccretion: 8, dustCap: 400, dustToCoreChance: 0.25,
+  coreAccretion: 12, coreCap: 950,   // a core gathers itself almost to ignition; the last step needs time or observers
+  fluctuationChance: 0.3,      // a quiet region occasionally gains a particle from the vacuum
+  captureWithin: 170, captureChance: 0.4, planetChance: 0.5,
+  supernovaDust: [2, 3],
+  maxCoresPerRegion: 2, crowdedRegion: 14,
+  // Stars burn at different rates. A few are giants that die within days; most are dwarfs that last months.
+  giantChance: 0.2, giantLifeDays: [4, 8], dwarfLifeDays: [60, 400], ticksPerDay: 7200,
+  remnantFadeTicks: 20000,     // old remnants fade from the map; their rows and history remain
+};
+
+export const ERAS = ['The Dust Age', 'The First Light', 'The Age of Ashes', 'The Age of Worlds', 'The Living Age', 'The Thinking Age'];
+
+export function starsDue(ageSeconds: number) {
+  let n = 0, t = 0;
+  for (const [until, every] of LAW_GRAVITY.starSchedule) {
+    const end = Math.min(ageSeconds, until);
+    if (end > t) n += (end - t) / every;
+    if (ageSeconds <= until) break;
+    t = until;
+  }
+  return Math.floor(n);
+}
+
 export const LAW_REPLICATION = { energyNeeded: 60, chance: 0.35, starFeed: 6, maxPerEpoch: 20 };
 
 // ---- LAW_INTERACTION ---------------------------------------------------------

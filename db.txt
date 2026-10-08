@@ -1,0 +1,13 @@
+postgresql://postgres:letsdoitgame123456789yes@db.qtyipbeyqujnbjzzpaek.supabase.co:5432/postgres
+
+
+postgresql://postgres.qtyipbeyqujnbjzzpaek:letsdoitgame123456789yes@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres
+letsdoitgame123456789yes
+
+/SK*VkrT3u5Dj8b
+host=db.qtyipbeyqujnbjzzpaek.supabase.co
+port=5432
+database=postgres
+user=postgres
+
+npx skills add supabase/agent-skills

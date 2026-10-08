@@ -7,7 +7,8 @@ import { makeSeed, roll } from './rng.js';
 import type { Obj } from './simulate.js';
 import { project } from './simulate.js';
 import { Frame, GameError, applyRegen, clamp, complexityOf, labelOf, regenDue, regionId, regionOf, round, type Holder } from './world.js';
-import { canSplit, changeForm, checkThresholds, generateRegion, inRegion, maybeEpoch, nextForm, split, transform } from './emergence.js';
+import { canSplit, changeForm, checkThresholds, generateRegion, inRegion, nextForm, split, transform } from './emergence.js';
+import { advance } from './cosmos.js';
 import { addKnowledge, evaluateDiscoveries } from './discoveries.js';
 
 type O = Obj & Holder;
@@ -315,7 +316,7 @@ export async function interact(db: DB, input: Input) {
       }
       case 'create:fizzle': frame.move(user, frame.vac, cost, 'effort'); say = 'It faded before it formed. The energy returned to the vacuum.'; break;
 
-      case 'explore:arrival': say = 'This region already had a state. Someone was here before you.'; break;
+      case 'explore:arrival': say = 'This region already had a state. It did not wait for you.'; break;
       default:
         if (outcome === 'anomaly') {
           if (input.type === 'create') frame.move(user, frame.vac, cost, 'effort');
@@ -413,7 +414,7 @@ export async function interact(db: DB, input: Input) {
 
     const objView = obj ? viewObject(obj, lvlAfter, frame.tick, 0, user.id) : null;
     const created = spawned.map((o) => viewObject(o, o.owner_user_id === user.id || o.parent_id ? 1 : 0, frame.tick, 0, user.id));
-    await maybeEpoch(frame);
+    await advance(frame);
     await frame.flush();
     await saveUser();
     const rank = rankOf(user);
@@ -450,11 +451,11 @@ export async function verify(db: DB, id: number, userId: number) {
 }
 
 // The universe moves even when nobody acts.
-export async function heartbeat(db: DB, ticks: number) {
+export async function heartbeat(db: DB, ticks = 0) {
   return db.tx(async (q) => {
     const frame = await Frame.open(q, true);
     frame.tick = frame.t0 + ticks;
-    await maybeEpoch(frame);
+    await advance(frame);
     await frame.flush();
     return frame.tick;
   });

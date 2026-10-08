@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import type { DB } from './db.js';
 import { login, register, requireAuth } from './auth.js';
-import { ACTIONS, KNOWLEDGE_DOMAINS, LAW_ENERGY_CONSERVATION as EC, REGION_SIZE, TYPES, level, rankOf } from './engine/laws.js';
+import { ACTIONS, ERAS, KNOWLEDGE_DOMAINS, LAW_ENERGY_CONSERVATION as EC, REGION_SIZE, TYPES, level, rankOf } from './engine/laws.js';
 import { DISCOVERIES } from './engine/discoveries.js';
 import { interact, possibilities, publicUser, verify, viewObject } from './engine/interact.js';
 import { GameError, labelOf } from './engine/world.js';
@@ -92,7 +92,8 @@ export function api(db: DB) {
       `SELECT username, current_location AS region FROM users WHERE id <> $1 AND last_seen > now() - interval '5 minutes'
           AND current_location IN (SELECT region_id FROM user_regions WHERE user_id = $1) LIMIT 30`, [u.id]);
     return {
-      universe: { tick: uni.current_tick, entropy: uni.entropy, totalEnergy: uni.total_energy, freeEnergy: uni.free_energy, totalInformation: uni.total_information, observers: Number(pop.n) },
+      universe: { tick: uni.current_tick, entropy: uni.entropy, totalEnergy: uni.total_energy, freeEnergy: uni.free_energy, totalInformation: uni.total_information, observers: Number(pop.n),
+        era: ERAS[uni.era] || ERAS[0], eraIndex: uni.era, bigBangAt: uni.big_bang_at, naturalStars: uni.natural_stars },
       user: publicUser(u), firstObject: u.stats?.first_object ?? null,
       regions: regions.map((g) => ({ id: g.id, num: g.num, gx: g.gx, gy: g.gy, entropy: Math.round(g.entropy), state: g.state, converged: g.converged, observers: Number(g.observers), interactions: Number(g.interaction_count) })),
       frontier: [...frontier.values()],
@@ -105,7 +106,7 @@ export function api(db: DB) {
   // Cheap heartbeat for the client: has anything happened? Also returns what others just did nearby.
   r.get('/universe/pulse', wrap(async (req) => {
     const after = int(req.query.after, 0);
-    const [uni] = await db.q('SELECT current_tick, entropy FROM universe WHERE id = 1');
+    const [uni] = await db.q('SELECT current_tick, entropy, era FROM universe WHERE id = 1');
     const [last] = await db.q('SELECT COALESCE(MAX(id), 0) AS id FROM interactions');
     const [u] = await db.q('UPDATE users SET last_seen = now(), last_seen_tick = $2 WHERE id = $1 RETURNING *', [uid(req), uni.current_tick]);
     const ripples = after > 0 ? await db.q(
@@ -114,7 +115,7 @@ export function api(db: DB) {
          JOIN user_regions ur ON ur.region_id = o.region_id AND ur.user_id = $1
         WHERE i.id > $2 AND i.user_id <> $1 ORDER BY i.id DESC LIMIT 12`, [uid(req), after]) : [];
     const [ev] = await db.q(`SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE impact <> 'minor'`);
-    return { tick: uni.current_tick, entropy: uni.entropy, lastInteraction: Number(last.id), lastMajorEvent: Number(ev.id), energy: publicUser(u).energy, ripples };
+    return { tick: uni.current_tick, entropy: uni.entropy, era: ERAS[uni.era] || ERAS[0], lastInteraction: Number(last.id), lastMajorEvent: Number(ev.id), energy: publicUser(u).energy, ripples };
   }));
 
   const eventRows = (where: string, params: any[], limit: number) => db.q(

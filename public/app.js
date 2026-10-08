@@ -65,7 +65,7 @@ async function veil(lines) {
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-let pulseTimer;
+let pulseTimer, pulses = 0;
 async function enter(arrivedTick) {
   S.laws = S.laws || (await api('/laws'));
   const me = await api('/me');
@@ -105,6 +105,7 @@ async function loadUniverse() {
 }
 function hud() {
   if (!S.uni) return;
+  $('#uEra').textContent = S.uni.era || '';
   $('#uTick').textContent = fmt(S.uni.tick); $('#uEntropy').textContent = Number(S.uni.entropy).toFixed(2); $('#uEnergy').textContent = compact(S.uni.totalEnergy);
   $('#meEnergy').textContent = fmt(S.me.energy); $('#meKnowledge').textContent = fmt(S.me.knowledge); $('#meInfluence').textContent = fmt(S.me.influence); $('#meRank').textContent = S.me.rank;
 }
@@ -112,7 +113,10 @@ async function pulse() {
   if (document.hidden || S.busy) return;
   try {
     const p = await api('/universe/pulse?after=' + S.lastInteraction);
-    S.uni.tick = p.tick; S.uni.entropy = p.entropy; S.me.energy = p.energy; hud();
+    S.uni.tick = p.tick; S.uni.entropy = p.entropy; S.uni.era = p.era; S.me.energy = p.energy; hud();
+    // The universe changes by itself too, so look again when something major happened and every so often regardless.
+    const quiet = !S.result && !S.showCollapsed;
+    if (p.lastInteraction === S.lastInteraction && quiet && (p.lastMajorEvent !== S.lastMajor || ++pulses % 5 === 0)) await loadUniverse();
     if (p.lastInteraction !== S.lastInteraction) {
       S.lastInteraction = p.lastInteraction;
       await loadUniverse();
@@ -170,12 +174,41 @@ function drawMap() {
     S.regions.map((g) => `<rect class="region${g.converged ? ' converged' : ''}" x="${g.gx * r + 2}" y="${g.gy * r + 2}" width="${r - 4}" height="${r - 4}" rx="16"/>${g.state === 'unstable' ? `<rect class="region-unstable" x="${g.gx * r + 2}" y="${g.gy * r + 2}" width="${r - 4}" height="${r - 4}" rx="16"/>` : ''}<text class="region-label" x="${g.gx * r + 12}" y="${g.gy * r + 18}">Region ${g.num}${g.converged ? ', converged' : ''}${g.state === 'unstable' ? ', unstable' : ''}</text>`).join('') +
     S.others.map((o, i) => { const g = S.regions.find((x) => x.id === o.region); return g ? `<text class="other-tag" x="${g.gx * r + 12}" y="${(g.gy + 1) * r - 12 - i * 10}">◌ ${esc(o.username)} is here</text>` : ''; }).join('') +
     (sel?.kind === 'point' ? `<circle class="pin" cx="${sel.x}" cy="${sel.y}" r="7"/>` : '');
-  $('#L-links').innerHTML = S.rels.map((l) => { const a = S.objects.get(l.a), b = S.objects.get(l.b); return a && b ? `<line class="link" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${Math.min(3, 0.6 + l.strength * 0.4)}"/>` : ''; }).join('');
+  $('#L-links').innerHTML = S.rels.map((l) => { const a = S.objects.get(l.a), b = S.objects.get(l.b); return a && b ? `<line class="link" data-a="${a.id}" data-b="${b.id}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${Math.min(3, 0.6 + l.strength * 0.4)}"/>` : ''; }).join('');
   $('#L-objects').innerHTML = [...S.objects.values()].map((o) => {
     const cls = ['obj', sel?.kind === 'object' && sel.id === o.id ? 'sel' : '', S.target === o.id ? 'tgt' : '', o.stability != null && o.stability < 20 && o.type !== 'remnant' ? 'shaky' : '', !o.known && o.id === S.firstObject && S.me.knowledge === 0 ? 'first' : ''].join(' ');
     return `<g class="${cls}" data-id="${o.id}" transform="translate(${o.x} ${o.y})"><circle class="hit" r="14"/><g class="glyph">${glyph(o)}</g><circle class="ring-sel" r="13"/>${o.name ? `<text class="name" y="22">${esc(o.name)}</text>` : ''}</g>`;
   }).join('');
+  planOrbits();
 }
+
+// Whatever is bonded to a star visibly circles it. This is display only: the server's
+// positions are the real ones, and the orbit passes through them.
+let orbits = [];
+function planOrbits() {
+  orbits = [];
+  for (const l of S.rels) {
+    const a = S.objects.get(l.a), b = S.objects.get(l.b); if (!a || !b) continue;
+    const star = a.type === 'star' ? a : b.type === 'star' ? b : null, o = star === a ? b : a;
+    if (!star || o.type === 'star' || o.type === 'core' || orbits.some((x) => x.id === o.id)) continue;
+    const r = Math.hypot(o.x - star.x, o.y - star.y); if (r < 8) continue;
+    orbits.push({ id: o.id, star, r, a0: Math.atan2(o.y - star.y, o.x - star.x), w: (2 * Math.PI) / (50 + r * 1.3),
+      el: document.querySelector(`#L-objects [data-id="${o.id}"]`), lines: [...document.querySelectorAll(`#L-links [data-a="${o.id}"], #L-links [data-b="${o.id}"]`)] });
+  }
+  turnOrbits();
+}
+const t0 = Date.now();
+function turnOrbits() {
+  if (calm || document.hidden || S.tab !== 'universe') return;
+  const t = (Date.now() - t0) / 1000;
+  for (const ob of orbits) {
+    const ang = ob.a0 + ob.w * t, x = ob.star.x + Math.cos(ang) * ob.r, y = ob.star.y + Math.sin(ang) * ob.r;
+    ob.el?.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+    for (const ln of ob.lines) { const end = ln.dataset.a == ob.id ? '1' : '2'; ln.setAttribute('x' + end, x.toFixed(1)); ln.setAttribute('y' + end, y.toFixed(1)); }
+  }
+}
+setInterval(turnOrbits, 120);
+
 function ripple(x, y, color = '#ece9f7', label) {
   const ns = 'http://www.w3.org/2000/svg';
   const c = document.createElementNS(ns, 'circle');

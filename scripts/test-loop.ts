@@ -3,6 +3,7 @@
 // Runs on a throwaway in-memory universe unless DATABASE_URL is set.
 process.env.DATA_DIR ||= 'memory://';
 process.env.JWT_SECRET ||= 'test-secret';
+process.env.HEARTBEAT_SECONDS = '0';   // the test drives time itself
 const { openDb } = await import('../src/db.js');
 const { genesis } = await import('../src/engine/seed.js');
 const { register } = await import('../src/auth.js');
@@ -31,6 +32,19 @@ const give = (id: number, n: number) => db.q('WITH a AS (UPDATE users SET energy
 
 // --- the core loop: A changes the world, B sees the consequence -------------------
 const objs = async (userId: number) => db.q(`SELECT o.* FROM objects o JOIN user_regions ur ON ur.region_id = o.region_id AND ur.user_id = $1 WHERE o.state <> 'merged' ORDER BY o.id`, [userId]);
+const stars0 = await db.q(`SELECT COUNT(*) AS n FROM objects WHERE type IN ('star', 'planet', 'core')`);
+check(Number(stars0[0].n) === 0, 'the universe begins with dust only: no stars, planets or cores');
+
+// --- the universe on its own: ten minutes after the big bang, about ten stars have formed unaided ---
+await db.q(`UPDATE universe SET big_bang_at = now() - interval '10 minutes'`);
+await heartbeat(db);
+const [nat] = await db.q(`SELECT natural_stars, era, (SELECT COUNT(*) FROM objects WHERE type = 'star') AS stars FROM universe`);
+check(Number(nat.natural_stars) >= 9 && Number(nat.stars) >= 9, 'stars ignite by themselves on the schedule (one a minute at first)', `${nat.stars} stars after 10 minutes, era ${nat.era}`);
+check(Number(nat.era) === 1, 'the first star began a new era');
+check(await conserved(), 'energy is conserved after natural star formation');
+
+// For the collective test, let one cloud at the origin have collapsed into a dormant core (test-only shortcut).
+await db.q(`UPDATE objects SET type = 'core', state = 'dormant', stability = 80 WHERE id = (SELECT id FROM objects WHERE region_id = '0:0' AND type = 'dust' ORDER BY energy DESC LIMIT 1)`);
 const core = (await objs(A.id)).find((o) => o.type === 'core');
 const pre = await possibilities(db, { userId: A.id, type: 'observe', objectId: core.id }) as any;
 check(pre.outcomes.every((o: any) => o.label === null), 'unwitnessed outcomes are unnamed in the preview');
@@ -44,7 +58,7 @@ check(Number(hist.n) === 2, 'every interaction is recorded');
 
 // --- collective emergence: three observers feed the dormant core until it ignites --
 let ignited = false, gifts = 0;
-for (let i = 0; i < 60 && !ignited; i++) {
+for (let i = 0; i < 90 && !ignited; i++) {
   const who = [A, B, C][i % 3];
   await give(who.id, 40);
   const r = await interact(db, { userId: who.id, type: 'energize', objectId: core.id, amount: 40 }) as any;
@@ -92,8 +106,17 @@ for (let n = 0; n < 900; n++) {
   if (n % 150 === 149) check(await conserved(), `energy is conserved after ${n + 1} attempted interactions`);
 }
 console.log(`       ${done} interactions resolved, ${refused} refused by the laws`);
-await heartbeat(db, 600);
-check(await conserved(), 'energy is conserved after a background epoch');
+for (let i = 0; i < 12; i++) await heartbeat(db, 260);
+check(await conserved(), 'energy is conserved after twelve background epochs of gravity');
+const [grav] = await db.q(`SELECT (SELECT COUNT(*) FROM objects WHERE props ? 'merged') AS merged, (SELECT COUNT(*) FROM events WHERE event_type = 'TRANSFORMATION' AND created_by_user_id IS NULL) AS natural`);
+check(Number(grav.merged) > 0, 'matter gathers by itself between epochs', `${grav.merged} objects have absorbed others; ${grav.natural} unaided transformations`);
+
+// --- stellar death: drain a star to its last energy; the next epoch it dies and enriches its surroundings ---
+await db.q(`WITH s AS (SELECT id, energy - 41 AS e FROM objects WHERE type = 'star' ORDER BY id LIMIT 1), a AS (UPDATE objects o SET energy = 41 FROM s WHERE o.id = s.id) UPDATE universe SET free_energy = free_energy + (SELECT e FROM s)`);
+for (let i = 0; i < 3; i++) await heartbeat(db, 260);
+const [nova] = await db.q(`SELECT (SELECT COUNT(*) FROM events WHERE event_type = 'SUPERNOVA') AS n, (SELECT COUNT(*) FROM objects WHERE props ? 'enriched') AS dust, era FROM universe`);
+check(Number(nova.n) >= 1 && Number(nova.dust) >= 2 && Number(nova.era) >= 2, 'a spent star dies and scatters enriched dust', `${nova.n} supernova, ${nova.dust} enriched clouds, era ${nova.era}`);
+check(await conserved(), 'energy is conserved after a supernova');
 
 // --- the record --------------------------------------------------------------------
 const rows = await db.q('SELECT id, probability_data, outcome FROM interactions ORDER BY id');

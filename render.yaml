@@ -5,6 +5,7 @@ services:
   - type: web
     name: the-next-frame
     runtime: node
+    plan: free
     buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/server.js
     healthCheckPath: /api/laws

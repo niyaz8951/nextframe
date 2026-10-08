@@ -53,6 +53,7 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 /* ---- frame ---- */
 .app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); background: var(--night); }
+.era { font: italic 400 14px/1.2 var(--serif); color: var(--amber); margin-top: 2px; white-space: nowrap; }
 .cosmos { display: flex; gap: 16px; text-align: right; }
 .cosmos dt, .self dt { font-size: 11px; color: var(--faint); line-height: 1.2; }
 .cosmos dd { font-size: 14px; font-weight: 600; white-space: nowrap; }
