@@ -7,6 +7,8 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const compact = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : fmt(n));
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
 const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const GLYPHS = ['○', '△', '▢', '✕', '◇', '☆'];
+const glyphs = (p) => [...String(p)].map((c) => GLYPHS[c] || '?').join('');
 const HUES = ['#f3c969', '#7cc6d6', '#c69cf0', '#f08a7b', '#9be0a8', '#e2e0f0', '#8f96d8'];
 
 const S = {
@@ -78,7 +80,7 @@ async function enter(arrivedTick) {
     await veil(['Before you existed, the universe was already moving.', `You have arrived at tick ${fmt(arrivedTick)}.`]);
   } else if (me.away.ticks >= 40) showAway(me.away);
   api('/me/seen', { body: {} }).catch(() => {});
-  const p = await api('/universe/pulse'); S.lastInteraction = p.lastInteraction; S.lastMajor = p.lastMajorEvent;
+  const p = await api('/universe/pulse'); S.lastInteraction = p.lastInteraction; S.lastMajor = p.lastMajorEvent; S.lastEvent = p.lastEvent; S.social = p.social;
   clearInterval(pulseTimer); pulseTimer = setInterval(pulse, 8000);
 }
 
@@ -112,7 +114,7 @@ function hud() {
 async function pulse() {
   if (document.hidden || S.busy) return;
   try {
-    const p = await api('/universe/pulse?after=' + S.lastInteraction);
+    const p = await api(`/universe/pulse?after=${S.lastInteraction}&event=${S.lastEvent || 0}`);
     S.uni.tick = p.tick; S.uni.entropy = p.entropy; S.uni.era = p.era; S.me.energy = p.energy; hud();
     // The universe changes by itself too, so look again when something major happened and every so often regardless.
     const quiet = !S.result && !S.showCollapsed;
@@ -120,9 +122,17 @@ async function pulse() {
     if (p.lastInteraction !== S.lastInteraction) {
       S.lastInteraction = p.lastInteraction;
       await loadUniverse();
-      for (const r of p.ripples) ripple(r.x, r.y, '#c69cf0', r.username);
       if (S.sel?.kind === 'object' && !S.result) refreshDetail();
     }
+    // Something moved nearby. It may have been an observer. It may have been the universe.
+    for (const r of p.ripples) ripple(r.x, r.y, '#c69cf0');
+    S.lastEvent = p.lastEvent;
+    const so = S.social || p.social, sn = p.social;
+    if (sn.contact > so.contact) toast('<b>Contact</b><span class="law">An echo was answered. It was another observer.</span>', 'law');
+    else if (sn.echo > so.echo) toast('<b>An echo</b><span class="law">Something echoed one of your signals.</span>', 'law');
+    if (sn.message > so.message) toast('<b>A message</b><span class="law">An observer you found has spoken.</span>', 'law');
+    if (sn.contact > so.contact || sn.echo > so.echo || sn.message > so.message) { if (S.tab === 'signals') signals($('#view-signals')); else $('#sigDot').hidden = false; }
+    S.social = sn;
     if (p.lastMajorEvent !== S.lastMajor) {
       const feed = await api('/universe/feed');
       for (const e of feed.events.filter((e) => e.id > S.lastMajor).reverse().slice(-3)) toast(esc(e.description));
@@ -177,7 +187,7 @@ function drawMap() {
   $('#L-links').innerHTML = S.rels.map((l) => { const a = S.objects.get(l.a), b = S.objects.get(l.b); return a && b ? `<line class="link" data-a="${a.id}" data-b="${b.id}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${Math.min(3, 0.6 + l.strength * 0.4)}"/>` : ''; }).join('');
   $('#L-objects').innerHTML = [...S.objects.values()].map((o) => {
     const cls = ['obj', sel?.kind === 'object' && sel.id === o.id ? 'sel' : '', S.target === o.id ? 'tgt' : '', o.stability != null && o.stability < 20 && o.type !== 'remnant' ? 'shaky' : '', !o.known && o.id === S.firstObject && S.me.knowledge === 0 ? 'first' : ''].join(' ');
-    return `<g class="${cls}" data-id="${o.id}" transform="translate(${o.x} ${o.y})"><circle class="hit" r="14"/><g class="glyph">${glyph(o)}</g><circle class="ring-sel" r="13"/>${o.name ? `<text class="name" y="22">${esc(o.name)}</text>` : ''}</g>`;
+    return `<g class="${cls}" data-id="${o.id}" transform="translate(${o.x} ${o.y})"><circle class="hit" r="14"/><g class="glyph">${glyph(o)}</g><circle class="ring-sel" r="13"/>${o.sig ? '<path class="sigmark" d="M8 -10 a5 5 0 0 1 5 5 M8 -14 a9 9 0 0 1 9 9"/>' : ''}${o.name ? `<text class="name" y="22">${esc(o.name)}</text>` : ''}</g>`;
   }).join('');
   planOrbits();
 }
@@ -408,6 +418,10 @@ function renderSheet() {
   } else if (r) body += resultHTML(r);
   if (S.error) body += `<p class="error" style="margin-top:10px">${esc(S.error)}</p>`;
   if (sel.kind === 'object' && o) {
+    if (o.level >= 1 && o.type !== 'remnant') {
+      body += `<div class="sigs"><h3><span>Signals on this</span><button class="pill" data-do="leave">Leave a signal<small style="opacity:.6;margin-left:6px">${d.signalCosts.leave}</small></button></h3>
+        ${d.signals.length ? d.signals.map((g) => `<div class="sig"><span class="glyphs">${glyphs(g.pattern)}</span><span class="t">${g.mine ? (g.isEcho ? 'your echo' : g.echoed ? 'yours, echoed by something' : 'yours, no answer yet') : g.isEcho ? 'an echo' : 'left by something'}, tick ${fmt(g.tick)}</span>${g.canEcho ? `<button class="pill go" data-do="echo" data-id="${g.id}">Echo<small style="opacity:.6;margin-left:6px">${d.signalCosts.echo}</small></button>` : '<span></span>'}</div>`).join('') : '<p class="t" style="font-size:13px;color:var(--faint)">Nothing has left a mark here.</p>'}</div>`;
+    }
     body += `<div class="links">${o.level >= 2 ? `<button class="quiet" data-do="history">Why does this exist?</button>` : ''}${d.canName ? `<button class="quiet" data-do="name">Name it</button>` : ''}${o.level >= 1 ? `<button class="quiet" data-do="note">Leave a note</button>` : ''}</div>`;
   }
   const top = el.scrollTop;
@@ -435,7 +449,9 @@ $('#sheet').addEventListener('click', async (e) => {
   }
   if (what === 'history') return showHistory(S.sel.id);
   if (what === 'name') return openModal(`<h2>Name it</h2><p class="fine">A name is permanent. Every observer will see it.</p><form data-form="name"><input name="name" maxlength="31" autocomplete="off" required><p class="error"></p><button class="primary">Give it this name</button></form>`);
-  if (what === 'note') return openModal(`<h2>Leave a note</h2><p class="fine">Other observers who study this will read it.</p><form data-form="note"><textarea name="body" rows="3" maxlength="280" required></textarea><p class="error"></p><button class="primary">Leave the note</button></form>`);
+  if (what === 'leave') return pickSignal(S.sel.id);
+  if (what === 'echo') return echo(Number(b.dataset.id));
+  if (what === 'note') return openModal(`<h2>Leave a note</h2><p class="fine">Words give you away, so only you and observers you have found can read notes.</p><form data-form="note"><textarea name="body" rows="3" maxlength="280" required></textarea><p class="error"></p><button class="primary">Leave the note</button></form>`);
 });
 
 async function showHistory(id) {
@@ -461,7 +477,8 @@ function openModal(html) { const m = $('#modal'); m.innerHTML = `<div class="mod
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal' || e.target.closest('[data-close]')) $('#modal').hidden = true; });
 addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#modal').hidden = true; });
 $('#modal').addEventListener('submit', async (e) => {
-  e.preventDefault(); const f = e.target, id = S.sel?.id;
+  const f = e.target; if (!f.dataset.form) return;
+  e.preventDefault(); const id = S.sel?.id;
   try {
     if (f.dataset.form === 'name') await api(`/objects/${id}/name`, { body: { name: f.name.value } });
     if (f.dataset.form === 'note') await api(`/objects/${id}/notes`, { body: { body: f.body.value } });
@@ -476,10 +493,11 @@ document.querySelector('.tabs').addEventListener('click', (e) => { const b = e.t
 async function showTab(tab) {
   S.tab = tab;
   document.querySelectorAll('.tabs button').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
-  for (const t of ['universe', 'discover', 'history', 'profile']) $('#view-' + t).hidden = t !== tab;
+  for (const t of ['universe', 'discover', 'history', 'signals', 'profile']) $('#view-' + t).hidden = t !== tab;
+  if (tab === 'signals') $('#sigDot').hidden = true;
   if (tab === 'universe') { applyView(); return; }
   const el = $('#view-' + tab);
-  try { await ({ discover, history, profile }[tab])(el); } catch (err) { el.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
+  try { await ({ discover, history, signals, profile }[tab])(el); } catch (err) { el.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
 }
 async function discover(el) {
   const [mine, all] = await Promise.all([api('/users/me/discoveries'), api('/discoveries')]);
@@ -491,8 +509,77 @@ async function discover(el) {
     <p class="fine" style="margin-top:12px">You have witnessed ${mine.witnessed} of ${mine.possibleOutcomes} possible outcomes.</p>
     ${firsts.length ? `<h3>Firsts</h3><ul class="rows">${firsts.map((d) => `<li><span>${esc(d.description)}</span><span class="t">tick ${fmt(d.tick)}</span></li>`).join('')}</ul>` : ''}
     <h3>Found by other observers</h3>
-    ${all.discoveries.filter((d) => d.username !== S.me.username).length ? `<ul class="rows">${all.discoveries.filter((d) => d.username !== S.me.username).slice(0, 15).map((d) => `<li><span>${esc(d.username)} found something${d.type === 'first' ? ': ' + esc(d.description) : '. You will have to find it yourself.'}</span><span class="t">tick ${fmt(d.tick)}</span></li>`).join('')}</ul>` : '<p class="empty">Nobody else has reported anything yet.</p>'}`;
+    ${all.discoveries.filter((d) => !d.mine).length ? `<ul class="rows">${all.discoveries.filter((d) => !d.mine).slice(0, 15).map((d) => `<li><span>${esc(d.username)} found something${d.type === 'first' ? ': ' + esc(d.description) : '. You will have to find it yourself.'}</span><span class="t">tick ${fmt(d.tick)}</span></li>`).join('')}</ul>` : '<p class="empty">Nobody else has reported anything yet.</p>'}`;
 }
+// ---- signals, contact, speech
+function pickSignal(objectId) {
+  const picked = [];
+  const draw = () => {
+    $('#slots').innerHTML = [0, 1, 2].map((i) => `<span>${picked[i] != null ? GLYPHS[picked[i]] : ''}</span>`).join('');
+    $('#sendSig').disabled = picked.length < 3;
+  };
+  openModal(`<h2>Leave a signal</h2><p class="fine">Three glyphs, no words. Anything that observes this object will see them. Nothing will tell it who left them, and nothing will tell you who answers.</p>
+    <div class="slots" id="slots"></div><div class="picker">${GLYPHS.map((g, i) => `<button type="button" data-g="${i}" aria-label="glyph ${i + 1}">${g}</button>`).join('')}</div>
+    <p class="error" id="sigErr"></p><button class="primary" id="sendSig" disabled>Leave it here</button><p style="text-align:center;margin-top:8px"><button class="quiet" id="clearSig" type="button">Start again</button></p>`);
+  draw();
+  $('.picker').onclick = (e) => { const b = e.target.closest('[data-g]'); if (b && picked.length < 3) { picked.push(Number(b.dataset.g)); draw(); } };
+  $('#clearSig').onclick = () => { picked.length = 0; draw(); };
+  $('#sendSig').onclick = async () => {
+    try {
+      const r = await api(`/objects/${objectId}/signal`, { body: { pattern: picked.join('') } });
+      $('#modal').hidden = true; S.me.energy = r.energy; hud(); toast(esc(r.narrative));
+      for (const d of r.newDiscoveries) toast(`<b>Discovery</b><span class="law">${esc(d.text)}</span>`, 'law');
+      await loadUniverse(); await refreshDetail().catch(() => {});
+    } catch (err) { $('#sigErr').textContent = err.message; }
+  };
+}
+async function echo(signalId) {
+  try {
+    const r = await api(`/signals/${signalId}/echo`, { body: {} });
+    S.me.energy = r.energy; hud();
+    if (r.contact) { toast(`<b>Contact</b><span class="law">${esc(r.narrative)}</span>`, 'law'); if (S.social) S.social.contact = Math.max(S.social.contact, r.contact.id); }
+    else toast(esc(r.narrative));
+    for (const d of r.newDiscoveries) toast(`<b>Discovery</b><span class="law">${esc(d.text)}</span>`, 'law');
+    await loadUniverse();
+    if (S.tab === 'signals') signals($('#view-signals')); else await refreshDetail().catch(() => {});
+    if (r.contact) openChat(r.contact.id, r.contact.username);
+  } catch (err) { toast(esc(err.message)); }
+}
+async function signals(el) {
+  const d = await api('/signals');
+  el.innerHTML = `<h2>Signals</h2><p class="lede">You cannot see other observers and they cannot see you. Leave three glyphs on something. If an echo comes back, answer it. Only then will you know whether it was someone.</p>
+    <h3>Observers you have found</h3>
+    ${d.contacts.length ? d.contacts.map((c) => `<button class="contact" data-chat="${c.id}" data-name="${esc(c.username)}"><b>${esc(c.username)}</b><span class="t" style="grid-column:2;grid-row:1 / span 2;color:var(--ice)">Speak</span><span>${c.last ? (c.last.mine ? 'You: ' : '') + esc(c.last.body) : 'Found at tick ' + fmt(c.sinceTick) + '. Nothing said yet.'}</span></button>`).join('') : '<p class="empty">Nobody yet. You may be alone here. You may not.</p>'}
+    <h3>Signals you have left</h3>
+    ${d.signals.length ? `<ul class="rows">${d.signals.map((g) => `<li><div class="sig"><span class="glyphs">${glyphs(g.pattern)}</span><span class="t">on ${esc(g.object)}, tick ${fmt(g.tick)}<br>${g.openEcho ? 'Something echoed it.' : g.echoes ? 'Echoed. You answered. Nothing more came back.' : 'No answer.'}</span>${g.openEcho ? `<button class="pill go" data-answer="${g.openEcho}">Answer<small style="opacity:.6;margin-left:6px">${d.costs.echo}</small></button>` : '<span></span>'}</div></li>`).join('')}</ul>` : '<p class="empty">You have not left a signal. Observe something, then leave one on it.</p>'}`;
+  el.onclick = (e) => {
+    const a = e.target.closest('[data-answer]'); if (a) return echo(Number(a.dataset.answer));
+    const c = e.target.closest('[data-chat]'); if (c) openChat(Number(c.dataset.chat), c.dataset.name);
+  };
+}
+let chatTimer = null;
+async function openChat(id, name) {
+  let last = 0;
+  openModal(`<h2>${esc(name)}</h2><p class="fine">You found each other. What you say here is only between you.</p><div class="chat" id="chat"></div>
+    <form class="chatbar" id="chatForm"><textarea name="body" rows="1" maxlength="500" placeholder="Say something" required></textarea><button class="primary">Send</button></form><p class="error" id="chatErr"></p>`);
+  const load = async () => {
+    if ($('#modal').hidden || !$('#chat')) return clearInterval(chatTimer);
+    try {
+      const d = await api(`/contacts/${id}/messages?after=${last}`); const box = $('#chat'); if (!box) return;
+      for (const m of d.messages) { const p = document.createElement('p'); if (m.mine) p.className = 'mine'; p.textContent = m.body; const t = document.createElement('small'); t.textContent = 'tick ' + fmt(m.tick); p.append(t); box.append(p); last = m.id; }
+      if (d.messages.length) box.scrollTop = box.scrollHeight;
+      if (!box.children.length && !box.dataset.empty) { box.dataset.empty = '1'; box.innerHTML = '<span class="empty" style="padding:6px 0">Nothing has been said yet.</span>'; }
+      else if (d.messages.length && box.dataset.empty) { box.querySelector('.empty')?.remove(); delete box.dataset.empty; }
+      if (S.social && last > S.social.message) S.social.message = last;
+    } catch {}
+  };
+  await load(); clearInterval(chatTimer); chatTimer = setInterval(load, 4000);
+  $('#chatForm').onsubmit = async (e) => {
+    e.preventDefault(); const f = e.target, body = f.body.value.trim(); if (!body) return;
+    try { await api(`/contacts/${id}/messages`, { body: { body } }); f.body.value = ''; $('#chatErr').textContent = ''; await load(); } catch (err) { $('#chatErr').textContent = err.message; }
+  };
+}
+
 let historyMode = 'feed';
 async function history(el) {
   const seg = `<div class="seg" style="margin-bottom:10px">${[['feed', 'Reality feed'], ['all', 'Every interaction'], ['mine', 'Yours']].map(([k, l]) => `<button data-h="${k}" aria-selected="${k === historyMode}">${l}</button>`).join('')}</div>`;

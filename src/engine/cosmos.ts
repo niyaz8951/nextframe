@@ -7,6 +7,7 @@ import { roll, sha } from './rng.js';
 import type { Obj } from './simulate.js';
 import { Frame, clamp, complexityOf, labelOf, round, type Holder } from './world.js';
 import { changeForm, checkThresholds, inRegion, maybeEpoch, supernova } from './emergence.js';
+import { universeSignals } from '../social.js';
 
 type O = Obj & Holder;
 
@@ -68,6 +69,7 @@ async function cosmicEpoch(frame: Frame, epoch: number, n: number) {
   // Gravity: a rotating share of regions each epoch.
   const regions = await q('SELECT id, num, gx, gy FROM regions ORDER BY (num * 7919 + $1 * 104729) % 1000003 LIMIT $2', [epoch, G.regionsPerEpoch]);
   for (const r of regions) for (let pass = 0; pass < Math.min(n, 3); pass++) await gravity(frame, r, epoch, pass, n);
+  await universeSignals(q, frame.tick, epoch, regions.map((r) => r.id));
 }
 
 const LIGHT = new Set(['particle', 'cluster']);

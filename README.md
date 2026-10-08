@@ -127,6 +127,20 @@ prints when each thing first happens. In one such run with no players: first sta
 within a minute, first star death on day 5, first planet on day 6, first life on
 day 18, first civilisation on day 23. Players change all of this.
 
+**Observers cannot see each other.** Nothing in the game shows another player's name,
+presence or words. The record says only "an observer". To find someone:
+
+1. Leave a signal on an object you have observed: three glyphs, no words.
+2. Anyone who observes that object sees the glyphs, with no author, and may echo them.
+3. The universe also leaves signals of its own, and echoes about a third of the
+   signals players leave, after a delay. An echo looks the same either way.
+4. Answer the echo. If it came from another observer, the two of you have made
+   contact: you see each other's names and can talk. If it was the universe,
+   nothing ever comes back.
+
+Notes on objects are words, so they are visible only to their writer and to
+observers the writer has found. The code is in `src/social.ts`.
+
 **Unexplored regions have no rows in the database.** A region is given a state by
 the first observer to explore it, using that interaction's seed. Later observers find
 it as it was left.
@@ -157,6 +171,10 @@ POST /api/objects/:id/notes        { body }
 GET  /api/interactions/:id/verify
 GET  /api/users/:id                ("me" works)   GET /api/users/:id/discoveries
 GET  /api/discoveries   GET /api/events   GET /api/timeline
+POST /api/objects/:id/signal       { pattern }   three digits 0-5
+POST /api/signals/:id/echo
+GET  /api/signals                  your signals, echoes and contacts
+GET  /api/contacts/:id/messages    POST /api/contacts/:id/messages { body }
 ```
 
 The client only ever says what it wants to do. The server decides whether it is

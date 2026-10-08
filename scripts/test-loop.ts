@@ -118,6 +118,47 @@ const [nova] = await db.q(`SELECT (SELECT COUNT(*) FROM events WHERE event_type 
 check(Number(nova.n) >= 1 && Number(nova.dust) >= 2 && Number(nova.era) >= 2, 'a spent star dies and scatters enriched dust', `${nova.n} supernova, ${nova.dust} enriched clouds, era ${nova.era}`);
 check(await conserved(), 'energy is conserved after a supernova');
 
+// --- finding each other: signal -> echo -> answer --------------------------------
+{
+  const express = (await import('express')).default;
+  const { api } = await import('../src/routes.js');
+  const jwt = (await import('jsonwebtoken')).default;
+  const app = express(); app.use(express.json()); app.use('/api', api(db));
+  const srv = app.listen(0); const base = `http://127.0.0.1:${(srv.address() as any).port}/api`;
+  const call = async (u: any, path: string, body?: any) => {
+    const r = await fetch(base + path, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + jwt.sign({ sub: String(u.id) }, process.env.JWT_SECRET!) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, ...(await r.json() as any) };
+  };
+  await give(A.id, 60); await give(B.id, 60); await give(C.id, 60);
+  const target = (await db.q(`SELECT o.id FROM objects o WHERE o.region_id = '0:0' AND o.state <> 'merged' AND o.type <> 'remnant' ORDER BY o.id DESC LIMIT 1`))[0].id;
+  for (const u of users) await db.q('INSERT INTO observations (user_id, object_id, level, count, first_tick) VALUES ($1, $2, 1, 1, 0) ON CONFLICT DO NOTHING', [u.id, target]);
+  const tl = await call(B, '/timeline');
+  check(tl.interactions.every((i: any) => i.mine || i.observer === 'An observer'), 'before contact, other observers have no names anywhere in the record');
+  const s1 = await call(A, `/objects/${target}/signal`, { pattern: '204' });
+  const seenByB = (await call(B, `/objects/${target}`)).signals;
+  check(s1.ok && seenByB.some((x: any) => x.id === s1.id && !x.mine && x.canEcho) && !('user_id' in seenByB[0]), 'a signal is visible on the object with no author');
+  const e1 = await call(B, `/signals/${s1.id}/echo`, {});
+  check(e1.ok && e1.contact === null, 'echoing a signal does not reveal who left it');
+  const mineA = (await call(A, '/signals')).signals.find((x: any) => x.id === s1.id);
+  check(mineA.openEcho === e1.id, 'the sender sees that something echoed, not who');
+  const denied = await call(A, `/contacts/1/messages`, { body: 'hello?' });
+  check(denied.status === 404, 'no speech before contact');
+  const a1 = await call(A, `/signals/${e1.id}/echo`, {});
+  check(a1.contact?.username === B.username, 'answering an observer\'s echo makes contact and reveals the name', a1.narrative);
+  await call(A, `/contacts/${a1.contact.id}/messages`, { body: 'Is anyone there?' });
+  const got = await call(B, `/contacts/${a1.contact.id}/messages`);
+  check(got.messages.length === 1 && got.messages[0].body === 'Is anyone there?' && !got.messages[0].mine, 'after contact they can speak');
+  check((await call(C, `/contacts/${a1.contact.id}/messages`)).status === 404, 'a third observer cannot read their channel');
+  // the universe echoes too, and answering it leads nowhere
+  const s2 = await call(C, `/objects/${target}/signal`, { pattern: '111' });
+  await db.q('INSERT INTO signals (object_id, user_id, pattern, reply_to, universe_tick) VALUES ($1, NULL, $2, $3, 0)', [target, '111', s2.id]);
+  const uEcho = (await call(C, '/signals')).signals.find((x: any) => x.id === s2.id).openEcho;
+  const a2 = await call(C, `/signals/${uEcho}/echo`, {});
+  check(a2.ok && a2.contact === null && a2.narrative === e1.narrative, 'answering the universe\'s echo looks the same and reveals nothing');
+  check(await conserved(), 'energy is conserved after signalling');
+  srv.close();
+}
+
 // --- the record --------------------------------------------------------------------
 const rows = await db.q('SELECT id, probability_data, outcome FROM interactions ORDER BY id');
 let badProb = 0, badVerify = 0;

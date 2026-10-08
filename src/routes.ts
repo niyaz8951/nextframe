@@ -7,6 +7,7 @@ import { ACTIONS, ERAS, KNOWLEDGE_DOMAINS, LAW_ENERGY_CONSERVATION as EC, REGION
 import { DISCOVERIES } from './engine/discoveries.js';
 import { interact, possibilities, publicUser, verify, viewObject } from './engine/interact.js';
 import { GameError, labelOf } from './engine/world.js';
+import { SIGNAL, contactsOf, signalsOn, social, socialPulse, whoIs } from './social.js';
 
 const wrap = (fn: (req: Request, res: Response) => Promise<any>) => (req: Request, res: Response) =>
   fn(req, res).then((out) => { if (out !== undefined) res.json(out); }).catch((e) => {
@@ -45,16 +46,17 @@ export function api(db: DB) {
     const events = await db.q(`SELECT e.universe_tick AS tick, e.event_type AS type, e.description, e.impact FROM events e WHERE e.universe_tick > $1 AND e.impact <> 'minor' AND (e.created_by_user_id IS NULL OR e.created_by_user_id <> $2) ORDER BY e.id DESC LIMIT 6`, [since, u.id]);
     const [count] = await db.q(`SELECT COUNT(*) AS n FROM events WHERE universe_tick > $1 AND impact <> 'minor'`, [since]);
     const touched = await db.q(
-      `SELECT us.username, i.interaction_type AS type, i.outcome, i.universe_tick AS tick, o.id AS object_id, o.name, o.type AS object_type
+      `SELECT us.username, i.user_id, i.interaction_type AS type, i.outcome, i.universe_tick AS tick, o.id AS object_id, o.name, o.type AS object_type
          FROM interactions i JOIN objects o ON o.id = i.object_id JOIN users us ON us.id = i.user_id
         WHERE o.owner_user_id = $1 AND i.user_id <> $1 AND i.universe_tick > $2 ORDER BY i.id DESC LIMIT 5`, [u.id, since]);
     const changed = await db.q(
       `SELECT e.description, e.universe_tick AS tick FROM events e JOIN observations ob ON ob.object_id = e.affected_object_id AND ob.user_id = $1
         WHERE e.universe_tick > $2 AND (e.created_by_user_id IS NULL OR e.created_by_user_id <> $1) AND e.event_type IN ('COLLAPSE','TRANSFORMATION','STAR_IGNITION','MERGE','LIFE') ORDER BY e.id DESC LIMIT 5`, [u.id, since]);
+    const known = await contactsOf(db.q, u.id);
     return {
       user: publicUser(u), tick: uni.current_tick,
       away: { ticks: Number(uni.current_tick) - since, majorEvents: Number(count.n), events, changed,
-        touched: touched.map((t) => ({ username: t.username, verb: ACTIONS[t.type]?.verb || t.type, object: t.name || `${TYPES[t.object_type]?.label} #${t.object_id}`, tick: t.tick })) },
+        touched: touched.map((t) => ({ username: whoIs(t.user_id, t.username, u.id, known), verb: ACTIONS[t.type]?.verb || t.type, object: t.name || `${TYPES[t.object_type]?.label} #${t.object_id}`, tick: t.tick })) },
     };
   }));
   r.post('/me/seen', wrap(async (req) => {
@@ -84,12 +86,14 @@ export function api(db: DB) {
          LEFT JOIN observations ob ON ob.object_id = o.id AND ob.user_id = $1
         WHERE o.state <> 'merged' ORDER BY o.id LIMIT 1500`, [u.id]);
     const ids = new Set(rows.map((o) => Number(o.id)));
+    const friends = await contactsOf(db.q, u.id);
+    const marked = new Set((await db.q('SELECT DISTINCT object_id FROM signals WHERE universe_tick > $1', [Number(uni.current_tick) - SIGNAL.visibleTicks])).map((x) => Number(x.object_id)));
     const rel = await db.q(
       `SELECT rl.id, rl.object_a AS a, rl.object_b AS b, rl.strength FROM relationships rl
          JOIN objects o ON o.id = rl.object_a JOIN user_regions ur ON ur.region_id = o.region_id AND ur.user_id = $1
         WHERE rl.ended_tick IS NULL LIMIT 2000`, [u.id]);
     const others = await db.q(
-      `SELECT username, current_location AS region FROM users WHERE id <> $1 AND last_seen > now() - interval '5 minutes'
+      `SELECT id, username, current_location AS region FROM users WHERE id <> $1 AND last_seen > now() - interval '5 minutes'
           AND current_location IN (SELECT region_id FROM user_regions WHERE user_id = $1) LIMIT 30`, [u.id]);
     return {
       universe: { tick: uni.current_tick, entropy: uni.entropy, totalEnergy: uni.total_energy, freeEnergy: uni.free_energy, totalInformation: uni.total_information, observers: Number(pop.n),
@@ -97,9 +101,10 @@ export function api(db: DB) {
       user: publicUser(u), firstObject: u.stats?.first_object ?? null,
       regions: regions.map((g) => ({ id: g.id, num: g.num, gx: g.gx, gy: g.gy, entropy: Math.round(g.entropy), state: g.state, converged: g.converged, observers: Number(g.observers), interactions: Number(g.interaction_count) })),
       frontier: [...frontier.values()],
-      objects: rows.map((o) => viewObject(o, Number(o.obs_level), Number(uni.current_tick), o.region_entropy, u.id)),
+      objects: rows.map((o) => ({ ...viewObject(o, Number(o.obs_level), Number(uni.current_tick), o.region_entropy, u.id), sig: marked.has(Number(o.id)) || undefined })),
       relationships: rel.filter((x) => ids.has(Number(x.a)) && ids.has(Number(x.b))),
-      others,
+      others: others.filter((x) => friends.has(Number(x.id))).map((x) => ({ username: x.username, region: x.region })),   // only observers you have found
+      signalGlyphs: SIGNAL.glyphs,
     };
   }));
 
@@ -110,12 +115,19 @@ export function api(db: DB) {
     const [last] = await db.q('SELECT COALESCE(MAX(id), 0) AS id FROM interactions');
     const [u] = await db.q('UPDATE users SET last_seen = now(), last_seen_tick = $2 WHERE id = $1 RETURNING *', [uid(req), uni.current_tick]);
     const ripples = after > 0 ? await db.q(
-      `SELECT i.id, i.object_id, i.interaction_type AS type, us.username, o.x, o.y
+      `SELECT i.id, i.object_id, o.x, o.y
          FROM interactions i JOIN users us ON us.id = i.user_id JOIN objects o ON o.id = i.object_id
          JOIN user_regions ur ON ur.region_id = o.region_id AND ur.user_id = $1
         WHERE i.id > $2 AND i.user_id <> $1 ORDER BY i.id DESC LIMIT 12`, [uid(req), after]) : [];
+    // Things the universe did by itself ripple in exactly the same way, so a ripple alone never proves an observer.
+    const afterEvent = int(req.query.event, 0);
+    const natural = afterEvent > 0 ? await db.q(
+      `SELECT e.id, o.x, o.y FROM events e JOIN objects o ON o.id = e.affected_object_id JOIN user_regions ur ON ur.region_id = o.region_id AND ur.user_id = $1
+        WHERE e.id > $2 AND e.created_by_user_id IS NULL AND o.state <> 'merged' ORDER BY e.id DESC LIMIT 8`, [uid(req), afterEvent]) : [];
+    const [evAll] = await db.q('SELECT COALESCE(MAX(id), 0) AS id FROM events');
     const [ev] = await db.q(`SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE impact <> 'minor'`);
-    return { tick: uni.current_tick, entropy: uni.entropy, era: ERAS[uni.era] || ERAS[0], lastInteraction: Number(last.id), lastMajorEvent: Number(ev.id), energy: publicUser(u).energy, ripples };
+    return { tick: uni.current_tick, entropy: uni.entropy, era: ERAS[uni.era] || ERAS[0], lastInteraction: Number(last.id), lastMajorEvent: Number(ev.id), lastEvent: Number(evAll.id), energy: publicUser(u).energy,
+      ripples: [...ripples, ...natural].map((x) => ({ x: x.x, y: x.y })), social: await socialPulse(db.q, uid(req)) };
   }));
 
   const eventRows = (where: string, params: any[], limit: number) => db.q(
@@ -129,7 +141,8 @@ export function api(db: DB) {
       `SELECT i.id, i.universe_tick AS tick, i.interaction_type AS type, i.outcome, i.energy_spent AS spent, i.user_id, us.username, i.object_id, o.name, o.id AS oid
          FROM interactions i JOIN users us ON us.id = i.user_id LEFT JOIN objects o ON o.id = i.object_id
         WHERE ($1 = 0 OR i.id < $1) AND ($2 = 0 OR i.user_id = $2) ORDER BY i.id DESC LIMIT 50`, [int(req.query.before, 0), mine ? uid(req) : 0]);
-    return { interactions: rows.map((i) => ({ id: Number(i.id), tick: i.tick, observer: i.username, mine: Number(i.user_id) === uid(req), type: i.type, verb: ACTIONS[i.type]?.verb || i.type,
+    const known = await contactsOf(db.q, uid(req));
+    return { interactions: rows.map((i) => ({ id: Number(i.id), tick: i.tick, observer: whoIs(i.user_id, i.username, uid(req), known), mine: Number(i.user_id) === uid(req), type: i.type, verb: ACTIONS[i.type]?.verb || i.type,
       object: i.oid ? publicObjectName(i) : i.type === 'explore' ? 'an unknown region' : 'empty space', objectId: i.object_id, outcome: ACTIONS[i.type]?.outcomes[i.outcome] || i.outcome, spent: Number(i.spent) })) };
   }));
 
@@ -161,7 +174,8 @@ export function api(db: DB) {
     return {
       object: { ...viewObject(o, lvl, Number(uni.current_tick), o.region_entropy, uid(req)), regionNum: o.region_num },
       bonds: bonds.map((b) => ({ id: Number(b.id), strength: b.strength, label: Number(b.lvl) >= 1 ? b.name || `${TYPES[b.type]?.label} #${b.id}` : `Unknown Object #${b.id}` })),
-      otherObservers: Number(watch.n), actions, canName: lvl >= 3 && !o.name && o.type !== 'remnant',
+      otherObservers: Number(watch.n), actions,
+      signals: lvl >= 1 ? await signalsOn(db.q, Number(o.id), uid(req), Number(uni.current_tick)) : [], signalCosts: { leave: SIGNAL.leaveCost, echo: SIGNAL.echoCost }, canName: lvl >= 3 && !o.name && o.type !== 'remnant',
       merged: o.state === 'merged' ? o.props?.merged_into : null,
     };
   }));
@@ -179,23 +193,27 @@ export function api(db: DB) {
   r.get('/objects/:id/history', wrap(async (req) => {
     const o = await seen(uid(req), int(req.params.id));
     if (Number(o.obs_level) < 2) throw new GameError(403, 'You do not know it well enough yet. Observe it more closely.');
-    const [owner] = o.owner_user_id ? await db.q('SELECT username FROM users WHERE id = $1', [o.owner_user_id]) : [null];
-    const [finder] = o.props?.found_by ? await db.q('SELECT username FROM users WHERE id = $1', [o.props.found_by]) : [null];
+    const me = uid(req), known = await contactsOf(db.q, me);
+    const [owner] = o.owner_user_id ? await db.q('SELECT id, username FROM users WHERE id = $1', [o.owner_user_id]) : [null];
+    const [finder] = o.props?.found_by ? await db.q('SELECT id, username FROM users WHERE id = $1', [o.props.found_by]) : [null];
     const [parent] = o.parent_id ? await db.q('SELECT id, name, type FROM objects WHERE id = $1', [o.parent_id]) : [null];
     const interactions = await db.q(
-      `SELECT i.id, i.universe_tick AS tick, i.interaction_type AS type, i.outcome, us.username FROM interactions i JOIN users us ON us.id = i.user_id
+      `SELECT i.id, i.universe_tick AS tick, i.interaction_type AS type, i.outcome, i.user_id, us.username FROM interactions i JOIN users us ON us.id = i.user_id
         WHERE i.object_id = $1 OR i.target_object_id = $1 ORDER BY i.id DESC LIMIT 40`, [o.id]);
     const [agg] = await db.q('SELECT COUNT(*) AS n, COUNT(DISTINCT user_id) AS observers FROM interactions WHERE object_id = $1 OR target_object_id = $1', [o.id]);
     const events = await db.q('SELECT universe_tick AS tick, event_type AS type, description FROM events WHERE affected_object_id = $1 ORDER BY id DESC LIMIT 20', [o.id]);
-    const notes = await db.q('SELECT n.id, n.body, n.universe_tick AS tick, us.username FROM notes n JOIN users us ON us.id = n.user_id WHERE n.object_id = $1 ORDER BY n.id DESC LIMIT 20', [o.id]);
+    // Notes are words, and words give an observer away: they are shown only to their writer and to observers the writer has found.
+    const notes = (await db.q('SELECT n.id, n.body, n.universe_tick AS tick, n.user_id, us.username FROM notes n JOIN users us ON us.id = n.user_id WHERE n.object_id = $1 ORDER BY n.id DESC LIMIT 60', [o.id]))
+      .filter((n) => Number(n.user_id) === me || known.has(Number(n.user_id))).slice(0, 20).map((n) => ({ id: n.id, body: n.body, tick: n.tick, username: whoIs(n.user_id, n.username, me, known) }));
     const [uni] = await db.q('SELECT current_tick FROM universe WHERE id = 1');
     return {
       id: Number(o.id), label: labelOf(o), createdTick: o.created_tick, age: Number(uni.current_tick) - Number(o.created_tick),
-      createdBy: owner?.username ?? null, foundBy: finder?.username ?? null, namedBy: o.props?.named_by ?? null,
+      createdBy: owner ? whoIs(owner.id, owner.username, me, known, false) : null, foundBy: finder ? whoIs(finder.id, finder.username, me, known, false) : null,
+      namedBy: o.props?.named_by_id ? whoIs(o.props.named_by_id, o.props.named_by, me, known, false) : null,
       parent: parent ? { id: Number(parent.id), label: parent.name || `${TYPES[parent.type]?.label} #${parent.id}` } : null,
       forms: o.props?.forms || [], origin: o.props?.origin ?? null, was: o.props?.was ?? null,
       totals: { interactions: Number(agg.n), observers: Number(agg.observers) },
-      interactions: interactions.map((i) => ({ id: Number(i.id), tick: i.tick, observer: i.username, verb: ACTIONS[i.type]?.verb || i.type, outcome: ACTIONS[i.type]?.outcomes[i.outcome] || i.outcome })),
+      interactions: interactions.map((i) => ({ id: Number(i.id), tick: i.tick, observer: whoIs(i.user_id, i.username, me, known), verb: ACTIONS[i.type]?.verb || i.type, outcome: ACTIONS[i.type]?.outcomes[i.outcome] || i.outcome })),
       events, notes,
     };
   }));
@@ -208,10 +226,10 @@ export function api(db: DB) {
       const [ob] = await q('SELECT level FROM observations WHERE user_id = $1 AND object_id = $2', [u.id, o?.id ?? 0]);
       if (!o || !ob || Number(ob.level) < 3) throw new GameError(403, 'You can only name what you have observed closely.');
       if (o.name) throw new GameError(409, `It already has a name: ${o.name}.`);
-      await q('UPDATE objects SET name = $2, props = props || $3::jsonb WHERE id = $1', [o.id, name, JSON.stringify({ named_by: u.username })]);
+      await q('UPDATE objects SET name = $2, props = props || $3::jsonb WHERE id = $1', [o.id, name, JSON.stringify({ named_by: u.username, named_by_id: Number(u.id) })]);
       const [uni] = await q('SELECT current_tick FROM universe WHERE id = 1');
       await q(`INSERT INTO events (universe_tick, event_type, description, affected_object_id, region_id, created_by_user_id, impact) VALUES ($1, 'NAMING', $2, $3, $4, $5, 'minor')`,
-        [uni.current_tick, `${u.username} named ${TYPES[o.type]?.label} #${o.id}: "${name}".`, o.id, o.region_id, u.id]);
+        [uni.current_tick, `An observer named ${TYPES[o.type]?.label} #${o.id}: "${name}".`, o.id, o.region_id, u.id]);
       return { ok: true, name };
     });
   }));
@@ -230,6 +248,7 @@ export function api(db: DB) {
   // ---- observers and what they have learned -------------------------------------
   r.get('/users/:id', wrap(async (req) => {
     const id = req.params.id === 'me' ? uid(req) : int(req.params.id);
+    if (id !== uid(req) && !(await contactsOf(db.q, uid(req))).has(id)) throw new GameError(404, 'You have not made contact with that observer.');
     const u = await me(id).catch(() => { throw new GameError(404, 'No such observer.'); });
     const [uni] = await db.q('SELECT current_tick FROM universe WHERE id = 1');
     const [i] = await db.q('SELECT COUNT(*) AS n, COUNT(DISTINCT object_id) AS objects FROM interactions WHERE user_id = $1', [id]);
@@ -251,14 +270,18 @@ export function api(db: DB) {
   }));
   r.get('/users/:id/discoveries', wrap(async (req) => {
     const id = req.params.id === 'me' ? uid(req) : int(req.params.id);
+    if (id !== uid(req)) throw new GameError(404, 'Those are not yours to read.');
     const rows = await db.q('SELECT key, discovery_type AS type, description, discovered_tick AS tick, object_id AS "objectId" FROM discoveries WHERE user_id = $1 ORDER BY id DESC', [id]);
     const u = await me(id);
     return { discoveries: rows, lawsFound: rows.filter((x) => x.type === 'law').length, lawsTotal: DISCOVERIES.length, witnessed: Object.keys(u.witnessed || {}).length,
       possibleOutcomes: Object.values(ACTIONS).reduce((s, a) => s + Object.keys(a.outcomes).length, 0), rank: rankOf(u),
       domains: KNOWLEDGE_DOMAINS.map((k) => ({ key: k, points: u.domains?.[k] || 0, level: level(u.domains?.[k] || 0) })) };
   }));
-  r.get('/discoveries', wrap(async () => ({
-    discoveries: await db.q(`SELECT d.description, d.discovery_type AS type, d.discovered_tick AS tick, us.username FROM discoveries d JOIN users us ON us.id = d.user_id ORDER BY d.id DESC LIMIT 40`),
-  })));
+  r.get('/discoveries', wrap(async (req) => {
+    const known = await contactsOf(db.q, uid(req));
+    const rows = await db.q(`SELECT d.description, d.discovery_type AS type, d.discovered_tick AS tick, d.user_id, us.username FROM discoveries d JOIN users us ON us.id = d.user_id ORDER BY d.id DESC LIMIT 40`);
+    return { discoveries: rows.map((d) => ({ description: d.description, type: d.type, tick: d.tick, mine: Number(d.user_id) === uid(req), username: whoIs(d.user_id, d.username, uid(req), known) })) };
+  }));
+  social(r, db, { wrap, uid, limit: actLimit });
   return r;
 }

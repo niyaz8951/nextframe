@@ -36,6 +36,12 @@ export const DISCOVERIES: Def[] = [
     text: 'Focus bends the distribution toward your intent. It never fixes the outcome.' },
   { key: 'replication', domain: 'life', points: 5, test: (s) => a(s, 'signal') >= 1,
     text: 'Some systems respond. Whether they understand is not yet known.' },
+  { key: 'signals', domain: 'probability', points: 2, test: (s) => (s.signals || 0) >= 1,
+    text: 'A signal left on an object stays there. Whether anything reads it is another matter.' },
+  { key: 'echoes', domain: 'probability', points: 3, test: (s) => (s.echoes || 0) >= 2,
+    text: 'An echo proves that something noticed. It does not prove that someone did.' },
+  { key: 'contact', domain: 'life', points: 8, test: (s) => (s.contacts || 0) >= 1,
+    text: 'Some echoes are other observers. Only an answered echo tells you which.' },
   { key: 'answered', domain: 'life', points: 8, test: (s) => n(s, 'signal:reply') >= 1,
     text: 'Something answered. Observation may run in both directions.' },
 ];

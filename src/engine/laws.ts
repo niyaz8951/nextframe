@@ -157,7 +157,7 @@ export const ACTIONS: Record<string, Action> = {
     outcomes: { settle: 'It settles', lock: 'It locks into order', nothing: 'No effect', backfire: 'It backfires' },
   },
   signal: {
-    label: 'Signal', verb: 'signalled', cost: 5, ticks: 2, domain: 'life', needs: 'object', focusable: true, primary: ['adapts', 'reply'],
+    label: 'Call to it', verb: 'called to', cost: 5, ticks: 2, domain: 'life', needs: 'object', focusable: true, primary: ['adapts', 'reply'],
     only: (t) => !!TYPES[t]?.life || t === 'anomaly',
     base: { silence: 50, reacts: 28, adapts: 15, reply: 7 },
     outcomes: { silence: 'Silence', reacts: 'It reacts', adapts: 'It adapts', reply: 'It answers' },

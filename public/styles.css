@@ -178,8 +178,31 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
 .self dd { font-size: 17px; font-weight: 650; line-height: 1.15; }
 #meEnergy { color: var(--amber); }
 .self .rank { text-align: right; } .self .rank dd { font: italic 400 18px/1.15 var(--serif); }
-.tabs { display: grid; grid-template-columns: repeat(4, 1fr); }
-.tabs button { padding: 11px 4px 12px; min-height: 46px; color: var(--faint); font-weight: 500; font-size: 14px; border-top: 2px solid transparent; }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); }
+.tabs button { padding: 11px 2px 12px; min-height: 46px; color: var(--faint); font-weight: 500; font-size: 13.5px; border-top: 2px solid transparent; position: relative; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); margin-left: 4px; vertical-align: 2px; }
+/* signals: wordless marks, and what comes back */
+.sigmark { fill: none; stroke: var(--ice); stroke-width: 1.1; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.glyphs { font-size: 22px; letter-spacing: .22em; color: var(--ink); white-space: nowrap; }
+.sigs { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 4px; }
+.sigs h3 { font: 500 13px var(--sans); color: var(--dim); margin: 0; display: flex; justify-content: space-between; align-items: center; }
+.sig { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; min-height: 40px; }
+.sig .t { font-size: 12px; color: var(--faint); }
+.pill { border: 1px solid var(--line); border-radius: 999px; padding: 7px 13px; min-height: 36px; font-weight: 500; font-size: 14px; white-space: nowrap; }
+.pill.go { border-color: var(--ice); color: var(--ice); }
+.picker { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 14px 0 6px; }
+.picker button { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 12px; font-size: 24px; }
+.picker button:active { background: var(--rise); }
+.slots { display: flex; gap: 10px; justify-content: center; margin: 10px 0 2px; }
+.slots span { width: 52px; height: 52px; border-radius: 12px; background: var(--night); border: 1px dashed var(--line); display: grid; place-items: center; font-size: 26px; }
+.chat { display: grid; gap: 8px; max-height: 46vh; overflow-y: auto; padding: 8px 0; }
+.chat p { max-width: 82%; padding: 9px 12px; border-radius: 14px; background: var(--rise); justify-self: start; overflow-wrap: anywhere; }
+.chat p.mine { justify-self: end; background: #2a3170; }
+.chat small { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; }
+.chatbar { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+.chatbar .primary { width: auto; margin: 10px 0 0; padding: 12px 16px; min-height: 46px; }
+.contact { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; width: 100%; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.contact b { font: 400 22px/1.1 var(--serif); } .contact span { color: var(--dim); font-size: 14px; grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tabs button[aria-current="page"] { color: var(--ink); border-top-color: var(--ink); }
 
 /* ---- overlays ---- */
@@ -206,7 +229,7 @@ dl, dd, dt, h1, h2, h3, p { margin: 0; }
   .actbar { margin: 12px -20px 0; padding: 10px 20px 16px; }
   .modal { align-items: center; } .modal-card { border-radius: 18px; }
   .dock { display: grid; grid-template-columns: 1fr auto; align-items: center; }
-  .tabs { width: 420px; }
+  .tabs { width: 520px; }
   .self { grid-template-columns: repeat(4, auto); justify-content: start; gap: 28px; } .self .rank { text-align: left; }
 }
 @media (max-width: 380px) { .cosmos div:nth-child(3) { display: none; } .wordmark.small { font-size: 19px; } .self { gap: 12px; } }

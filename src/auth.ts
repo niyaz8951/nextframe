@@ -51,7 +51,7 @@ export async function register(db: DB, body: any) {
     const [first] = await q(`SELECT id FROM objects WHERE region_id = $1 AND type = 'particle' AND state <> 'merged' ORDER BY (x-$2)*(x-$2)+(y-$3)*(y-$3) LIMIT 1`, [start, (gx + 0.5) * REGION_SIZE, (gy + 0.5) * REGION_SIZE]);
     await q(`UPDATE users SET energy = $2, stats = $3::jsonb WHERE id = $1`, [u.id, holder.energy, JSON.stringify({ total: 0, actions: {}, outcomes: {}, first_object: first?.id ?? null })]);
     await q('INSERT INTO user_regions (user_id, region_id, discovered_tick) VALUES ($1, $2, $3)', [u.id, start, f.tick]);
-    await f.event('ARRIVAL', `A new observer arrived: ${username}.`, { userId: u.id, regionId: start });
+    await f.event('ARRIVAL', 'A new observer arrived.', { userId: u.id, regionId: start });
     await f.flush();
     return { id: Number(u.id), username, arrivedTick: f.tick };
   });

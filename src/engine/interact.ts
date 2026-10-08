@@ -159,7 +159,7 @@ async function anomaly(frame: Frame, user: any, at: { x: number; y: number; regi
   user.stats.anomalies = (user.stats.anomalies || 0) + 1;
   if (r >= 0.95 && (user.stats.total || 0) >= 25 && !user.stats.observedBy) {
     user.stats.observedBy = frame.tick;
-    await frame.event('OBSERVED', `Something observed ${user.username}.`, { userId: user.id, regionId: at.region, impact: 'major' });
+    await frame.event('OBSERVED', 'Something observed an observer.', { userId: user.id, regionId: at.region, impact: 'major' });
     return 'For one frame, the direction reversed. Something has observed you.';
   }
   if (r < 0.35) {
@@ -250,7 +250,7 @@ export async function interact(db: DB, input: Input) {
       case 'draw:clean': say = `A clean transfer. +${frame.move(obj!, user, amount, 'draw')} energy.`; break;
       case 'draw:leak': { const got = frame.move(obj!, user, Math.ceil(amount / 2), 'draw'); const lost = frame.move(obj!, frame.vac, Math.floor(amount / 2), 'leak'); say = `You caught ${got}. ${lost} leaked into the vacuum.`; break; }
       case 'draw:destabilize': { const got = frame.move(obj!, user, amount, 'draw'); bump(obj!, -15); obj!.state = 'excited'; say = `+${got} energy, but you left it shaking.`; break; }
-      case 'draw:collapse': { const got = frame.move(obj!, user, amount, 'draw'); user.stats.collapses = (user.stats.collapses || 0) + 1; await frame.collapse(obj!, `${user.username} drew out what was holding it together.`, user.id); say = `+${got} energy. It could not survive the loss and collapsed.`; break; }
+      case 'draw:collapse': { const got = frame.move(obj!, user, amount, 'draw'); user.stats.collapses = (user.stats.collapses || 0) + 1; await frame.collapse(obj!, 'An observer drew out what was holding it together.', user.id); say = `+${got} energy. It could not survive the loss and collapsed.`; break; }
 
       case 'connect:bond': {
         if (bc.existing) { await q('UPDATE relationships SET strength = strength + 1 WHERE id = $1', [bc.existing.id]); say = 'The bond between them grew stronger.'; }
@@ -291,11 +291,11 @@ export async function interact(db: DB, input: Input) {
       case 'signal:adapts': obj!.props = { ...obj!.props, complexity: complexityOf(obj!) + 5 }; bump(obj!, 5); say = 'It changed its behaviour in response. It is slightly more complex now.'; break;
       case 'signal:reply': {
         addKnowledge(user, 'life', 2); say = 'It answered. You do not know what it said.';
-        if (obj!.type === 'intelligence' && !user.stats.observedBy) { user.stats.observedBy = frame.tick; say = 'It answered. Then: something has observed you.'; await frame.event('OBSERVED', `Something observed ${user.username}.`, { userId: user.id, objectId: obj!.id, regionId: obj!.region_id, impact: 'major' }); }
+        if (obj!.type === 'intelligence' && !user.stats.observedBy) { user.stats.observedBy = frame.tick; say = 'It answered. Then: something has observed you.'; await frame.event('OBSERVED', 'Something observed an observer.', { userId: user.id, objectId: obj!.id, regionId: obj!.region_id, impact: 'major' }); }
         break;
       }
 
-      case 'unmake:unmade': user.stats.collapses = (user.stats.collapses || 0) + 1; await frame.collapse(obj!, `${user.username} unmade it.`, user.id); say = 'It is gone. Its energy returned to the vacuum. Its history did not.'; break;
+      case 'unmake:unmade': user.stats.collapses = (user.stats.collapses || 0) + 1; await frame.collapse(obj!, 'An observer unmade it.', user.id); say = 'It is gone. Its energy returned to the vacuum. Its history did not.'; break;
       case 'unmake:resists': bump(obj!, 3); say = 'It resisted. What has a long history is hard to erase.'; break;
       case 'unmake:burst': {
         const near = frame.adopt(await q(`SELECT * FROM objects WHERE region_id = $1 AND id <> $2 AND state <> 'merged' AND type <> 'remnant' ORDER BY (x-$3)*(x-$3)+(y-$4)*(y-$4) LIMIT 5 FOR UPDATE`, [obj!.region_id, obj!.id, obj!.x, obj!.y]));
@@ -311,7 +311,7 @@ export async function interact(db: DB, input: Input) {
         const made = await frame.spawn({ type: outcome, x: bc.point!.x, y: bc.point!.y, from: user, energy: 20, stability: 45 + roll(seed, 'c-stab') * 30, owner: user.id, why: 'creation' });
         user.stats.created = (user.stats.created || 0) + 1;
         await q('INSERT INTO observations (user_id, object_id, level, count, first_tick) VALUES ($1,$2,2,0,$3) ON CONFLICT DO NOTHING', [user.id, made.id, frame.tick]);
-        await frame.event('CREATION', `✦ ${user.username} created a ${TYPES[outcome].label.toLowerCase()}.`, { objectId: made.id, regionId: made.region_id, userId: user.id });
+        await frame.event('CREATION', `✦ An observer created a ${TYPES[outcome].label.toLowerCase()}.`, { objectId: made.id, regionId: made.region_id, userId: user.id });
         say = `Something exists that did not exist one frame ago: a ${TYPES[outcome].label.toLowerCase()}, holding 20 of your energy.`; break;
       }
       case 'create:fizzle': frame.move(user, frame.vac, cost, 'effort'); say = 'It faded before it formed. The energy returned to the vacuum.'; break;
@@ -330,7 +330,7 @@ export async function interact(db: DB, input: Input) {
 
     if (input.type === 'explore') {
       await q('INSERT INTO user_regions (user_id, region_id, discovered_tick) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [user.id, region.id, frame.tick]);
-      if (outcome !== 'arrival') await frame.event('EXPLORATION', `🔭 ${user.username} gave Region ${region.num} its first state.`, { regionId: region.id, userId: user.id });
+      if (outcome !== 'arrival') await frame.event('EXPLORATION', `🔭 An observer gave Region ${region.num} its first state.`, { regionId: region.id, userId: user.id });
       user.current_location = region.id;
     }
 
@@ -391,7 +391,7 @@ export async function interact(db: DB, input: Input) {
       if (lvlBefore === 0) {
         const [seen] = await q(`SELECT 1 AS x FROM events WHERE event_type = 'DISCOVERY' AND data->>'kind' = $1 LIMIT 1`, [obj.props.was || obj.type]);
         if (!seen && !['particle', 'remnant'].includes(obj.type)) {
-          await frame.event('DISCOVERY', `👤 ${user.username} discovered a previously unknown kind of structure.`, { objectId: obj.id, regionId: obj.region_id, userId: user.id, impact: 'major', data: { kind: obj.type } });
+          await frame.event('DISCOVERY', '👤 An observer discovered a previously unknown kind of structure.', { objectId: obj.id, regionId: obj.region_id, userId: user.id, impact: 'major', data: { kind: obj.type } });
           await q('INSERT INTO discoveries (user_id, discovery_type, key, object_id, description, discovered_tick) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING',
             [user.id, 'first', `first:${obj.type}`, obj.id, `First observer in this universe to identify a ${TYPES[obj.type].label}.`, frame.tick]);
           addKnowledge(user, 'probability', 2);
